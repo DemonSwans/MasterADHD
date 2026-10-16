@@ -1,13 +1,15 @@
-name: Zbuduj Android APK
+name: Zbuduj i Opublikuj APK
 
 on:
   push:
-    branches:
-      - main # Uruchamia się po pushu na gałąź main
+    branches: [ main ]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Pobranie kodu
@@ -35,8 +37,12 @@ jobs:
       - name: Budowanie APK
         run: flet build apk
 
-      - name: Udostępnienie pliku APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ADHD_Master_APK
-          path: build/apk/**/*.apk
+      - name: Zmień nazwę na stałą
+        run: mv build/apk/**/*.apk MasterADHD.apk
+
+      - name: Udostępnij w GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --cleanup-tag -y || true
+          gh release create latest MasterADHD.apk -t "Najnowsza Wersja" -n "Paczka stworzona automatycznie z GitHuba."

@@ -8,6 +8,8 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
+APP_VERSION = "1.0"  # Zmień tę liczbę przy kolejnych modyfikacjach kodu!
+
 LOCAL_DB = "tasks.db"
 CONFIG_DB = "app_config.db"
 
@@ -27,6 +29,45 @@ def get_config(key, default=""):
 def set_config(key, value):
     with sqlite3.connect(CONFIG_DB) as conn:
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
+
+
+# --- SYSTEM AKTUALIZACJI ---
+def check_for_updates(page: ft.Page):
+    """Sprawdza plik version.txt na GitHubie i proponuje aktualizację z GitHuba."""
+    try:
+        url = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/main/version.txt"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                remote_version = resp.read().decode("utf-8").strip()
+                if remote_version != APP_VERSION:
+                    show_update_dialog(page, remote_version)
+    except Exception:
+        pass  # Ignorujemy błędy połączenia (brak neta), apka ma ruszyć normalnie
+
+
+def show_update_dialog(page: ft.Page, new_version: str):
+    def download_update(e):
+        apk_url = "https://github.com/DemonSwans/MasterADHD/releases/download/latest/MasterADHD.apk"
+        page.launch_url(apk_url)
+        dialog.open = False
+        page.update()
+
+    def cancel_update(e):
+        dialog.open = False
+        page.update()
+
+    dialog = ft.AlertDialog(
+        title=ft.Text("🚀 Dostępna nowa wersja!"),
+        content=ft.Text(f"Wykryto aktualizację do wersji {new_version}.\nCzy chcesz ją teraz zainstalować?"),
+        actions=[
+            ft.TextButton("Później", on_click=cancel_update),
+            ft.Button("Aktualizuj", bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE, on_click=download_update)
+        ]
+    )
+    page.overlay.append(dialog)
+    dialog.open = True
+    page.update()
 
 
 # --- SYNCHRONIZACJA Z ARCHIWIZACJĄ ---
@@ -56,7 +97,6 @@ def pull_database():
 
     elif mode == "folder":
         folder = get_config("sync_folder", "").strip()
-        # Zabezpieczenie przed pustym polem i pętlą kopiowania samego siebie
         if not folder: return False, "Nie podano ścieżki do folderu!"
         if not os.path.exists(folder): return False, "Podany folder nie istnieje na dysku!"
 
@@ -71,8 +111,7 @@ def pull_database():
                 return False, "Odrzucono: Plik uszkodzony"
             except Exception as e:
                 return False, f"Błąd odczytu z dysku: {e}"
-        return True, "Folder gotowy (plik zostanie utworzony)"
-
+        return True, "Folder gotowy"
     return True, "Tryb lokalny"
 
 
@@ -95,9 +134,7 @@ def push_database():
 
     elif mode == "folder":
         folder = get_config("sync_folder", "").strip()
-        if not folder: return False, "Nie podano ścieżki do folderu!"
-        if not os.path.exists(folder): return False, "Podany folder nie istnieje na dysku!"
-
+        if not folder or not os.path.exists(folder): return False, "Folder nie istnieje"
         try:
             archive_dir = os.path.join(folder, "archive")
             os.makedirs(archive_dir, exist_ok=True)
@@ -249,12 +286,14 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.DARK
     init_db()
 
+    # Wywołanie skryptu auto-update zaraz po starcie apki
+    check_for_updates(page)
+
     current_view = "daily"
     max_a_limit = int(get_config("max_a_limit", "3"))
     open_prio_task_id = None
     active_drag_task_id = None
 
-    # Mapa śledząca, który krok jest obecnie wyświetlany
     active_subtask_idx_map = {}
 
     priority_colors = {"A": ft.Colors.RED_500, "B": ft.Colors.AMBER_700, "C": ft.Colors.BLUE_500}
@@ -281,7 +320,6 @@ def main(page: ft.Page):
         ok, msg = pull_database()
 
         if not ok:
-            # Jeśli włączenie się nie udało, wracamy do trybu lokalnego, żeby uniknąć problemów
             set_config("sync_mode", "none")
             warning_text.value = f"⚠️ {msg} (Zresetowano do trybu lokalnego)"
             status_text.value = ""
@@ -726,7 +764,7 @@ def main(page: ft.Page):
 
     page.add(
         ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area], expand=True, spacing=0))
-    refresh_view()#d
+    refresh_view()
 
 
 ft.run(main)

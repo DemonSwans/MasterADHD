@@ -4,8 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Nah">
-      <change afterPath="$PROJECT_DIR$/.github/workflows/build.yml" afterDir="false" />
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Enable manual workflow dispatch trigger in GitHub Actions">
+      <change afterPath="$PROJECT_DIR$/version.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -42,6 +42,65 @@
   <component name="McpProjectServerCommands">
     <commands />
     <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.0084316257297288" />
+      <entry key="MS500" value="1.4282175735515088" />
+      <entry key="S2" value="2.273176055155546" />
+      <entry key="S5" value="2.882355156821739" />
+      <entry key="S10" value="3.3008180546921735" />
+      <entry key="S30" value="3.723035010243244" />
+      <entry key="S60" value="3.8549571853641273" />
+      <entry key="M2" value="3.925744660062208" />
+      <entry key="M5" value="3.969869064994662" />
+      <entry key="M10" value="3.984861983427355" />
+      <entry key="M15" value="3.9898917857265954" />
+      <entry key="M30" value="3.9949377708493516" />
+      <entry key="H1" value="3.9974668510865845" />
+      <entry key="H2" value="3.9987329164786254" />
+      <entry key="H4" value="3.9993663309130776" />
+      <entry key="D1" value="3.9998943707962127" />
+      <entry key="W1" value="3.9999849096804714" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="0.9874525856702752" />
+      <entry key="MS500" value="1.4199916336811393" />
+      <entry key="S2" value="2.268614479011247" />
+      <entry key="S5" value="2.8782070361740795" />
+      <entry key="S10" value="3.297509973871361" />
+      <entry key="S30" value="3.721453360801397" />
+      <entry key="S60" value="3.8540871975616158" />
+      <entry key="M2" value="3.925288092400713" />
+      <entry key="M5" value="3.969681015392431" />
+      <entry key="M10" value="3.984767033735188" />
+      <entry key="M15" value="3.9898282788081048" />
+      <entry key="M30" value="3.9949059134275426" />
+      <entry key="H1" value="3.99745089630966" />
+      <entry key="H2" value="3.9987249325642145" />
+      <entry key="H4" value="3.9993623373232023" />
+      <entry key="D1" value="3.9998937049710395" />
+      <entry key="W1" value="3.999984814557032" />
+    </decayedShown>
   </component>
   <component name="ProjectColorInfo"><![CDATA[{
   "associatedIndex": 7,
@@ -86,7 +145,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1792105691165</updated>
-      <workItem from="1792159635957" duration="1097000" />
+      <workItem from="1792159635957" duration="2000000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -104,7 +163,31 @@
       <option name="project" value="LOCAL" />
       <updated>1792160489884</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="Add GitHub Actions workflow for building Android APK">
+      <option name="closed" value="true" />
+      <created>1792160753922</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1792160753922</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Test">
+      <option name="closed" value="true" />
+      <created>1792160879236</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1792160879236</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Enable manual workflow dispatch trigger in GitHub Actions">
+      <option name="closed" value="true" />
+      <created>1792161014806</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1792161014806</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -123,7 +206,10 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Nah" />
-    <option name="LAST_COMMIT_MESSAGE" value="Nah" />
+    <MESSAGE value="Add GitHub Actions workflow for building Android APK" />
+    <MESSAGE value="Test" />
+    <MESSAGE value="Enable manual workflow dispatch trigger in GitHub Actions" />
+    <option name="LAST_COMMIT_MESSAGE" value="Enable manual workflow dispatch trigger in GitHub Actions" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792160155684" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
