@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main # Uruchamia się po pushu na gałąź main
-
+  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
