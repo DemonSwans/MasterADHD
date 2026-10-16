@@ -26,8 +26,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instalacja Flet
-        run: pip install flet
+      - name: Instalacja bibliotek
+        run: |
+          pip install flet pytest
+
+      - name: Uruchom testy (pytest)
+        run: pytest test_app.py -v
 
       - name: Budowanie APK (Ominięcie pytania)
         run: yes | flet build apk

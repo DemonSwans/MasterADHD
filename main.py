@@ -33,7 +33,6 @@ def set_config(key, value):
 
 # --- SYSTEM AKTUALIZACJI ---
 def check_for_updates(page: ft.Page):
-    """Sprawdza plik version.txt na GitHubie i proponuje aktualizację z GitHuba."""
     try:
         url = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/main/version.txt"
         req = urllib.request.Request(url, method="GET")
@@ -43,7 +42,7 @@ def check_for_updates(page: ft.Page):
                 if remote_version != APP_VERSION:
                     show_update_dialog(page, remote_version)
     except Exception:
-        pass  # Ignorujemy błędy połączenia (brak neta), apka ma ruszyć normalnie
+        pass
 
 
 def show_update_dialog(page: ft.Page, new_version: str):
@@ -151,7 +150,7 @@ def push_database():
     return True, ""
 
 
-# --- BAZA DANYCH ---
+# --- BAZA DANYCH I LOGIKA ---
 def init_db():
     init_config_db()
     pull_database()
@@ -277,6 +276,32 @@ def end_of_day_db():
     push_database()
 
 
+def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=None):
+    if active_subtask_idx_map is None:
+        active_subtask_idx_map = {}
+    total_points = len(tasks_list) + len(routines_list)
+    if total_points == 0: return 0.0
+    done_points = 0
+
+    for t in tasks_list:
+        task_id, is_done, subtasks = t[0], t[3], t[5]
+        if subtasks:
+            first_undone = next((i for i, st in enumerate(subtasks) if st["is_done"] == 0), len(subtasks) - 1)
+            idx = active_subtask_idx_map.get(task_id, first_undone)
+            if first_undone < idx:
+                idx = first_undone
+            if idx < len(subtasks) and subtasks[idx]["is_done"] == 1:
+                done_points += 1
+        else:
+            if is_done == 1:
+                done_points += 1
+
+    for r in routines_list:
+        if r[2] == 1: done_points += 1
+
+    return done_points / total_points
+
+
 # --- INTERFEJS (Flet) ---
 def main(page: ft.Page):
     page.title = "ADHD Master & Daily"
@@ -286,14 +311,12 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.DARK
     init_db()
 
-    # Wywołanie skryptu auto-update zaraz po starcie apki
     check_for_updates(page)
 
     current_view = "daily"
     max_a_limit = int(get_config("max_a_limit", "3"))
     open_prio_task_id = None
     active_drag_task_id = None
-
     active_subtask_idx_map = {}
 
     priority_colors = {"A": ft.Colors.RED_500, "B": ft.Colors.AMBER_700, "C": ft.Colors.BLUE_500}
@@ -525,29 +548,6 @@ def main(page: ft.Page):
             active_subtask_idx_map[task_id] += 1
         refresh_view()
 
-    def calculate_progress(tasks_list, routines_list):
-        total_points = len(tasks_list) + len(routines_list)
-        if total_points == 0: return 0.0
-        done_points = 0
-
-        for t in tasks_list:
-            task_id, is_done, subtasks = t[0], t[3], t[5]
-            if subtasks:
-                first_undone = next((i for i, st in enumerate(subtasks) if st["is_done"] == 0), len(subtasks) - 1)
-                idx = active_subtask_idx_map.get(task_id, first_undone)
-                if first_undone < idx:
-                    idx = first_undone
-                if idx < len(subtasks) and subtasks[idx]["is_done"] == 1:
-                    done_points += 1
-            else:
-                if is_done == 1:
-                    done_points += 1
-
-        for r in routines_list:
-            if r[2] == 1: done_points += 1
-
-        return done_points / total_points
-
     def refresh_view():
         daily_nav_box.bgcolor = ft.Colors.GREY_800 if current_view == "daily" else None
         master_nav_box.bgcolor = ft.Colors.GREY_800 if current_view == "master" else None
@@ -596,7 +596,7 @@ def main(page: ft.Page):
         all_routines = get_routines()
 
         if is_daily_mode:
-            prog_val = calculate_progress(all_view_tasks, all_routines)
+            prog_val = calculate_progress_logic(all_view_tasks, all_routines, active_subtask_idx_map)
             progress_bar.value = prog_val
             progress_text.value = f"Postęp dnia: {int(prog_val * 100)}%"
             for r in all_routines:
@@ -762,9 +762,8 @@ def main(page: ft.Page):
 
         page.update()
 
-    page.add(
-        ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area], expand=True, spacing=0))
+    page.add(ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area], expand=True, spacing=0))
     refresh_view()
 
-
-ft.run(main)
+if __name__ == "__main__":
+    ft.run(main)
