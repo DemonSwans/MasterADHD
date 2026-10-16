@@ -1,0 +1,42 @@
+name: Zbuduj Android APK
+
+on:
+  push:
+    branches:
+      - main # Uruchamia się po pushu na gałąź main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Pobranie kodu
+        uses: actions/checkout@v4
+
+      - name: Instalacja Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Instalacja Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Instalacja Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalacja Flet
+        run: pip install flet
+
+      - name: Budowanie APK
+        run: flet build apk
+
+      - name: Udostępnienie pliku APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ADHD_Master_APK
+          path: build/apk/**/*.apk
