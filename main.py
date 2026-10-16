@@ -56,6 +56,10 @@ def pull_database():
 
     elif mode == "folder":
         folder = get_config("sync_folder", "").strip()
+        # Zabezpieczenie przed pustym polem i pętlą kopiowania samego siebie
+        if not folder: return False, "Nie podano ścieżki do folderu!"
+        if not os.path.exists(folder): return False, "Podany folder nie istnieje na dysku!"
+
         remote_file = os.path.join(folder, "tasks.db")
         if os.path.exists(remote_file):
             try:
@@ -67,7 +71,8 @@ def pull_database():
                 return False, "Odrzucono: Plik uszkodzony"
             except Exception as e:
                 return False, f"Błąd odczytu z dysku: {e}"
-        return True, "Folder gotowy"
+        return True, "Folder gotowy (plik zostanie utworzony)"
+
     return True, "Tryb lokalny"
 
 
@@ -90,7 +95,9 @@ def push_database():
 
     elif mode == "folder":
         folder = get_config("sync_folder", "").strip()
-        if not folder or not os.path.exists(folder): return False, "Folder nie istnieje"
+        if not folder: return False, "Nie podano ścieżki do folderu!"
+        if not os.path.exists(folder): return False, "Podany folder nie istnieje na dysku!"
+
         try:
             archive_dir = os.path.join(folder, "archive")
             os.makedirs(archive_dir, exist_ok=True)
@@ -113,15 +120,35 @@ def init_db():
     pull_database()
     with sqlite3.connect(LOCAL_DB) as conn:
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                is_daily INTEGER DEFAULT 0,
-                is_done INTEGER DEFAULT 0,
-                priority TEXT DEFAULT 'B',
-                subtasks TEXT DEFAULT '[]'
-            )
-        """)
+                     CREATE TABLE IF NOT EXISTS tasks
+                     (
+                         id
+                         INTEGER
+                         PRIMARY
+                         KEY
+                         AUTOINCREMENT,
+                         title
+                         TEXT
+                         NOT
+                         NULL,
+                         is_daily
+                         INTEGER
+                         DEFAULT
+                         0,
+                         is_done
+                         INTEGER
+                         DEFAULT
+                         0,
+                         priority
+                         TEXT
+                         DEFAULT
+                         'B',
+                         subtasks
+                         TEXT
+                         DEFAULT
+                         '[]'
+                     )
+                     """)
         try:
             conn.execute("ALTER TABLE tasks ADD COLUMN subtasks TEXT DEFAULT '[]'")
         except sqlite3.OperationalError:
@@ -243,7 +270,8 @@ def main(page: ft.Page):
     title_text = ft.Text("Daily", size=24, weight=ft.FontWeight.BOLD)
 
     ha_url_input = ft.TextField(label="Adres serwera HA", value=get_config("ha_url", ""))
-    folder_input = ft.TextField(label="Ścieżka folderu", value=get_config("sync_folder", ""))
+    folder_input = ft.TextField(label="Ścieżka folderu (wymagana przed włączeniem)",
+                                value=get_config("sync_folder", ""))
     routine_input = ft.TextField(label="Nowa rutyna (np. Leki, Woda)", expand=True)
 
     def change_sync_mode(mode_name):
@@ -251,9 +279,17 @@ def main(page: ft.Page):
         set_config("ha_url", ha_url_input.value.strip())
         set_config("sync_folder", folder_input.value.strip())
         ok, msg = pull_database()
-        warning_text.value = f"⚠️ {msg}" if not ok else ""
-        status_text.value = f"✓ {msg}" if ok else ""
-        if ok: push_database()
+
+        if not ok:
+            # Jeśli włączenie się nie udało, wracamy do trybu lokalnego, żeby uniknąć problemów
+            set_config("sync_mode", "none")
+            warning_text.value = f"⚠️ {msg} (Zresetowano do trybu lokalnego)"
+            status_text.value = ""
+        else:
+            push_database()
+            status_text.value = f"✓ {msg}"
+            warning_text.value = ""
+
         refresh_view()
 
     # --- OKIENKA DIALOGOWE ---
@@ -559,7 +595,6 @@ def main(page: ft.Page):
                     if task_id not in active_subtask_idx_map:
                         active_subtask_idx_map[task_id] = first_undone
                     else:
-                        # Jeśli użytkownik odznaczył krok na Master liście, przewiń do tyłu
                         if first_undone < active_subtask_idx_map[task_id]:
                             active_subtask_idx_map[task_id] = first_undone
                         elif active_subtask_idx_map[task_id] >= len(subtasks):
@@ -581,7 +616,6 @@ def main(page: ft.Page):
                         )
                     ]
 
-                    # Pokazanie nienachalnej strzałki do następnego kroku, jeśli ten jest odhaczony
                     if current_st["is_done"] == 1 and idx < len(subtasks) - 1:
                         row_controls.append(
                             ft.IconButton(
