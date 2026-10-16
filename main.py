@@ -726,7 +726,7 @@ def main(page: ft.Page):
 
     page.add(
         ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area], expand=True, spacing=0))
-    refresh_view()
+    refresh_view()#d
 
 
 ft.run(main)
