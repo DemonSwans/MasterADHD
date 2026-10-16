@@ -21,10 +21,8 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Instalacja Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
+      # ZREZYGNOWANO Z RĘCZNEJ INSTALACJI FLUTTERA
+      # Flet sam pobierze wymaganą dla siebie wersję.
 
       - name: Instalacja Python
         uses: actions/setup-python@v5
@@ -34,11 +32,11 @@ jobs:
       - name: Instalacja Flet
         run: pip install flet
 
-      - name: Budowanie APK
-        run: flet build apk
+      - name: Budowanie APK (Z automatyczną akceptacją pytań)
+        run: yes | flet build apk
 
       - name: Zmień nazwę na stałą
-        run: mv build/apk/**/*.apk MasterADHD.apk
+        run: find build/apk -name "*.apk" -exec mv {} MasterADHD.apk \;
 
       - name: Udostępnij w GitHub Releases
         env:
