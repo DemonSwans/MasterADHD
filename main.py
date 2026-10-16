@@ -8,7 +8,7 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-APP_VERSION = "1.0"  # Zmień tę liczbę przy kolejnych modyfikacjach kodu!
+APP_VERSION = "1.1"
 
 LOCAL_DB = "tasks.db"
 CONFIG_DB = "app_config.db"
@@ -626,6 +626,32 @@ def main(page: ft.Page):
                         bgcolor=priority_colors[other_p], border_radius=6,
                         on_click=lambda e, tid=task_id, np=other_p, idm=is_daily_mode: change_priority(tid, np, idm)))
 
+            # Gładkie pole w delikatnie innym odcieniu po prawej stronie zadania do przeciągania
+            drag_handle = ft.Draggable(
+                group="tasks",
+                data=str(task_id),
+                content=ft.Container(
+                    width=28,
+                    height=36,
+                    bgcolor="#2a2e38",
+                    border_radius=6,
+                ),
+                content_when_dragging=ft.Container(
+                    width=28,
+                    height=36,
+                    bgcolor="#2a2e38",
+                    border_radius=6,
+                    opacity=0.3,
+                ),
+                content_feedback=ft.Container(
+                    padding=10,
+                    bgcolor=ft.Colors.GREY_800,
+                    border_radius=8,
+                    content=ft.Text(title, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                ),
+                on_drag_start=lambda e, tid=task_id: set_active_drag(tid)
+            )
+
             if is_daily_mode:
                 if subtasks:
                     first_undone = next((i for i, st in enumerate(subtasks) if st["is_done"] == 0), len(subtasks) - 1)
@@ -664,9 +690,11 @@ def main(page: ft.Page):
                             )
                         )
 
+                    row_controls.append(drag_handle)
+
                     task_content = ft.Container(
                         bgcolor="#1e2128", padding=10, border_radius=8,
-                        content=ft.Row(controls=row_controls, vertical_alignment=ft.CrossAxisAlignment.START)
+                        content=ft.Row(controls=row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER)
                     )
                 else:
                     task_content = ft.Container(
@@ -676,9 +704,10 @@ def main(page: ft.Page):
                                 ft.Column(prio_items, spacing=4, tight=True),
                                 ft.Checkbox(label=title, value=bool(is_done), expand=True,
                                             on_change=lambda e, tid=task_id: handle_task_check(tid, e.control.value,
-                                                                                               None, subtasks))
+                                                                                               None, subtasks)),
+                                drag_handle
                             ],
-                            vertical_alignment=ft.CrossAxisAlignment.START,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         )
                     )
             else:
@@ -697,6 +726,7 @@ def main(page: ft.Page):
                     ft.TextButton("👣 Dodaj krok", icon=ft.Icons.ADD,
                                   on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs))
                 )
+                title_row_controls.append(drag_handle)
 
                 subtask_controls = []
                 for idx, st in enumerate(subtasks):
@@ -713,38 +743,15 @@ def main(page: ft.Page):
                 task_content = ft.Container(
                     bgcolor="#1e2128", padding=10, border_radius=8,
                     content=ft.Column([
-                                          ft.Row(title_row_controls, vertical_alignment=ft.CrossAxisAlignment.START)
+                                          ft.Row(title_row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER)
                                       ] + subtask_controls, spacing=2)
                 )
 
-            tasks_column.controls.append(ft.Draggable(group="tasks", data=str(task_id), content=task_content,
-                                                      content_when_dragging=ft.Container(opacity=0.3,
-                                                                                         content=task_content),
-                                                      content_feedback=ft.Container(padding=10,
-                                                                                    bgcolor=ft.Colors.GREY_800,
-                                                                                    border_radius=8,
-                                                                                    content=ft.Text(title,
-                                                                                                    color=ft.Colors.WHITE,
-                                                                                                    weight=ft.FontWeight.BOLD)),
-                                                      on_drag_start=lambda e, tid=task_id: set_active_drag(tid)))
+            tasks_column.controls.append(task_content)
 
         top_right_button = ft.Button("⚡ Szybka myśl", bgcolor=ft.Colors.GREY_800, color=ft.Colors.WHITE,
                                      on_click=open_quick_modal) if is_daily_mode else ft.Button(
             "➕ Dodaj Projekt / Zadanie", bgcolor=ft.Colors.GREY_800, color=ft.Colors.WHITE, on_click=open_master_modal)
-
-        default_drop_border = ft.Border.all(1, ft.Colors.GREY_800)
-        drop_zone_box = ft.Container(padding=10, border_radius=8, bgcolor="#181a20", border=default_drop_border,
-                                     content=ft.Row([ft.Icon(ft.Icons.SWAP_HORIZ, size=18, color=ft.Colors.GREY_400),
-                                                     ft.Text("Przeciągnij tutaj, aby przenieść między listami", size=12,
-                                                             color=ft.Colors.GREY_400)],
-                                                    alignment=ft.MainAxisAlignment.CENTER))
-        drop_zone_target = ft.DragTarget(group="tasks", content=drop_zone_box,
-                                         on_will_accept=lambda e: highlight_nav(drop_zone_box, True,
-                                                                                default_drop_border),
-                                         on_leave=lambda e: highlight_nav(drop_zone_box, False, default_drop_border),
-                                         on_accept=lambda e: (highlight_nav(drop_zone_box, False, default_drop_border),
-                                                              move_task_between_lists(resolve_dragged_task_id(e),
-                                                                                      0 if is_daily_mode else 1)))
 
         elements = [ft.Row([title_text, ft.Container(expand=True),
                             ft.IconButton(ft.Icons.SYNC, on_click=lambda e: (pull_database(), refresh_view())),
@@ -753,7 +760,7 @@ def main(page: ft.Page):
             elements.extend([progress_bar, progress_text, ft.Divider(height=10)])
             if all_routines: elements.extend(
                 [ft.Text("Nawyki i Rutyny:", size=13, weight=ft.FontWeight.BOLD), routines_row, ft.Divider(height=10)])
-        elements.extend([status_text, warning_text, drop_zone_target, tasks_column])
+        elements.extend([status_text, warning_text, tasks_column])
         content_column.controls = elements
 
         if is_daily_mode: content_column.controls.append(ft.Row(

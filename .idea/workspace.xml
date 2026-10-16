@@ -4,9 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and adjust APK naming process.">
-      <change afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.github/workflows/build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build.yml" afterDir="false" />
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
@@ -148,7 +146,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1792105691165</updated>
-      <workItem from="1792159635957" duration="4171000" />
+      <workItem from="1792159635957" duration="5294000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -214,7 +212,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792162559920</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check.">
+      <option name="closed" value="true" />
+      <created>1792165423785</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1792165423785</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -239,9 +245,10 @@
     <MESSAGE value="Add auto-update system, improve database sync handling, and enhance GitHub Actions for APK release." />
     <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and improve APK renaming process." />
     <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and adjust APK naming process." />
-    <option name="LAST_COMMIT_MESSAGE" value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and adjust APK naming process." />
+    <MESSAGE value="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check." />
+    <option name="LAST_COMMIT_MESSAGE" value="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792160155684" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792165467253" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>
