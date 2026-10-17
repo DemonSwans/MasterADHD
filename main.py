@@ -31,7 +31,7 @@ def set_config(key, value):
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
 
 
-# --- SYSTEM AKTUALIZACJI ---
+# --- SYSTEM AKTUALIZACJI (Kompatybilny z Flet 1.0) ---
 def check_for_updates(page: ft.Page):
     """Sprawdza plik version.txt na GitHubie (obsługuje gałęzie main oraz master)."""
     ts = datetime.now().timestamp()
@@ -48,13 +48,12 @@ def check_for_updates(page: ft.Page):
                     remote_version = resp.read().decode("utf-8").strip()
                     if remote_version != APP_VERSION:
                         show_update_dialog(page, remote_version)
-                    return  # Znaleziono plik, kończymy sprawdzanie
+                    return
         except urllib.error.HTTPError:
-            continue  # Jeśli 404 na 'main', spróbuj 'master'
+            continue
         except Exception:
-            return  # Brak internetu – cicho ignorujemy
+            return
 
-    # Jeśli w obu gałęziach jest 404, to pliku fizycznie nie ma na GitHubie
     page.overlay.append(
         ft.SnackBar(
             ft.Text("⚠️ Błąd 404: Brak pliku 'version.txt' na GitHubie! Wypchnij go (Push) do repozytorium."),
@@ -66,13 +65,9 @@ def check_for_updates(page: ft.Page):
 
 
 def show_update_dialog(page: ft.Page, new_version: str):
-    def download_update(e):
-        apk_url = "https://github.com/DemonSwans/MasterADHD/releases/download/latest/MasterADHD.apk"
-        page.launch_url(apk_url)
-        dialog.open = False
-        page.update()
+    apk_url = "https://github.com/DemonSwans/MasterADHD/releases/download/latest/MasterADHD.apk"
 
-    def cancel_update(e):
+    def close_dialog(e):
         dialog.open = False
         page.update()
 
@@ -80,8 +75,15 @@ def show_update_dialog(page: ft.Page, new_version: str):
         title=ft.Text("🚀 Dostępna nowa wersja!"),
         content=ft.Text(f"Wykryto aktualizację do wersji {new_version}.\nCzy chcesz ją teraz zainstalować?"),
         actions=[
-            ft.TextButton("Później", on_click=cancel_update),
-            ft.Button("Aktualizuj", bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE, on_click=download_update)
+            ft.TextButton("Później", on_click=close_dialog),
+            # W Flet 1.0 parametr url otwiera link bezpośrednio w przeglądarce
+            ft.Button(
+                "Aktualizuj",
+                url=apk_url,
+                bgcolor=ft.Colors.GREEN_700,
+                color=ft.Colors.WHITE,
+                on_click=close_dialog
+            )
         ]
     )
     page.overlay.append(dialog)
