@@ -33,16 +33,36 @@ def set_config(key, value):
 
 # --- SYSTEM AKTUALIZACJI ---
 def check_for_updates(page: ft.Page):
-    try:
-        url = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/main/version.txt"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            if resp.status == 200:
-                remote_version = resp.read().decode("utf-8").strip()
-                if remote_version != APP_VERSION:
-                    show_update_dialog(page, remote_version)
-    except Exception:
-        pass
+    """Sprawdza plik version.txt na GitHubie (obsługuje gałęzie main oraz master)."""
+    ts = datetime.now().timestamp()
+    urls = [
+        f"https://raw.githubusercontent.com/DemonSwans/MasterADHD/main/version.txt?t={ts}",
+        f"https://raw.githubusercontent.com/DemonSwans/MasterADHD/master/version.txt?t={ts}"
+    ]
+
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                if resp.status == 200:
+                    remote_version = resp.read().decode("utf-8").strip()
+                    if remote_version != APP_VERSION:
+                        show_update_dialog(page, remote_version)
+                    return  # Znaleziono plik, kończymy sprawdzanie
+        except urllib.error.HTTPError:
+            continue  # Jeśli 404 na 'main', spróbuj 'master'
+        except Exception:
+            return  # Brak internetu – cicho ignorujemy
+
+    # Jeśli w obu gałęziach jest 404, to pliku fizycznie nie ma na GitHubie
+    page.overlay.append(
+        ft.SnackBar(
+            ft.Text("⚠️ Błąd 404: Brak pliku 'version.txt' na GitHubie! Wypchnij go (Push) do repozytorium."),
+            open=True,
+            bgcolor=ft.Colors.RED_800
+        )
+    )
+    page.update()
 
 
 def show_update_dialog(page: ft.Page, new_version: str):
@@ -626,29 +646,14 @@ def main(page: ft.Page):
                         bgcolor=priority_colors[other_p], border_radius=6,
                         on_click=lambda e, tid=task_id, np=other_p, idm=is_daily_mode: change_priority(tid, np, idm)))
 
-            # Gładkie pole w delikatnie innym odcieniu po prawej stronie zadania do przeciągania
             drag_handle = ft.Draggable(
                 group="tasks",
                 data=str(task_id),
-                content=ft.Container(
-                    width=28,
-                    height=36,
-                    bgcolor="#2a2e38",
-                    border_radius=6,
-                ),
-                content_when_dragging=ft.Container(
-                    width=28,
-                    height=36,
-                    bgcolor="#2a2e38",
-                    border_radius=6,
-                    opacity=0.3,
-                ),
-                content_feedback=ft.Container(
-                    padding=10,
-                    bgcolor=ft.Colors.GREY_800,
-                    border_radius=8,
-                    content=ft.Text(title, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
-                ),
+                content=ft.Container(width=28, height=36, bgcolor="#2a2e38", border_radius=6),
+                content_when_dragging=ft.Container(width=28, height=36, bgcolor="#2a2e38", border_radius=6,
+                                                   opacity=0.3),
+                content_feedback=ft.Container(padding=10, bgcolor=ft.Colors.GREY_800, border_radius=8,
+                                              content=ft.Text(title, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
                 on_drag_start=lambda e, tid=task_id: set_active_drag(tid)
             )
 
@@ -769,8 +774,10 @@ def main(page: ft.Page):
 
         page.update()
 
-    page.add(ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area], expand=True, spacing=0))
+    page.add(
+        ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area], expand=True, spacing=0))
     refresh_view()
+
 
 if __name__ == "__main__":
     ft.run(main)
