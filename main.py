@@ -8,10 +8,33 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-APP_VERSION = "1.1"
-
 LOCAL_DB = "tasks.db"
 CONFIG_DB = "app_config.db"
+
+
+# --- ODCZYT WERSJI Z PLIKU ---
+def get_local_version():
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        ver_file = os.path.join(base_dir, "version.txt")
+        if os.path.exists(ver_file):
+            with open(ver_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return "1.2.1"
+
+
+APP_VERSION = get_local_version()
+
+
+def is_newer_version(remote_ver: str, local_ver: str) -> bool:
+    try:
+        r_parts = [int(x) for x in remote_ver.strip().split(".")]
+        l_parts = [int(x) for x in local_ver.strip().split(".")]
+        return r_parts > l_parts
+    except Exception:
+        return remote_ver.strip() != local_ver.strip()
 
 
 # --- KONFIGURACJA LOKALNA ---
@@ -31,9 +54,8 @@ def set_config(key, value):
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
 
 
-# --- SYSTEM AKTUALIZACJI (Kompatybilny z Flet 1.0) ---
+# --- SYSTEM AKTUALIZACJI BEZ BLOKAD SAMSUNG ---
 def check_for_updates(page: ft.Page):
-    """Sprawdza plik version.txt na GitHubie (obsługuje gałęzie main oraz master)."""
     ts = datetime.now().timestamp()
     urls = [
         f"https://raw.githubusercontent.com/DemonSwans/MasterADHD/main/version.txt?t={ts}",
@@ -46,7 +68,7 @@ def check_for_updates(page: ft.Page):
             with urllib.request.urlopen(req, timeout=4) as resp:
                 if resp.status == 200:
                     remote_version = resp.read().decode("utf-8").strip()
-                    if remote_version != APP_VERSION:
+                    if is_newer_version(remote_version, APP_VERSION):
                         show_update_dialog(page, remote_version)
                     return
         except urllib.error.HTTPError:
@@ -56,7 +78,7 @@ def check_for_updates(page: ft.Page):
 
     page.overlay.append(
         ft.SnackBar(
-            ft.Text("⚠️ Błąd 404: Brak pliku 'version.txt' na GitHubie! Wypchnij go (Push) do repozytorium."),
+            ft.Text("⚠️ Błąd 404: Brak pliku 'version.txt' na GitHubie!"),
             open=True,
             bgcolor=ft.Colors.RED_800
         )
@@ -65,24 +87,32 @@ def check_for_updates(page: ft.Page):
 
 
 def show_update_dialog(page: ft.Page, new_version: str):
-    apk_url = "https://github.com/DemonSwans/MasterADHD/releases/download/latest/MasterADHD.apk"
+    ts = int(datetime.now().timestamp())
+    apk_url = f"https://github.com/DemonSwans/MasterADHD/releases/download/latest/MasterADHD.apk?t={ts}"
 
     def close_dialog(e):
         dialog.open = False
         page.update()
 
+    def start_update(e):
+        close_dialog(e)
+        # Otwieramy link bezpośrednio – system Android na Samsungu przejmie pobieranie i zapyta raz o uprawnienie instalacji, które od teraz zapamięta
+        page.launch_url(apk_url)
+
     dialog = ft.AlertDialog(
         title=ft.Text("🚀 Dostępna nowa wersja!"),
-        content=ft.Text(f"Wykryto aktualizację do wersji {new_version}.\nCzy chcesz ją teraz zainstalować?"),
+        content=ft.Text(
+            f"Twoja wersja: v{APP_VERSION}\n"
+            f"Nowa wersja: v{new_version}\n\n"
+            f"Aktualizacja w tle dla Samsunga gotowa."
+        ),
         actions=[
             ft.TextButton("Później", on_click=close_dialog),
-            # W Flet 1.0 parametr url otwiera link bezpośrednio w przeglądarce
             ft.Button(
-                "Aktualizuj",
-                url=apk_url,
+                "Aktualizuj teraz",
                 bgcolor=ft.Colors.GREEN_700,
                 color=ft.Colors.WHITE,
-                on_click=close_dialog
+                on_click=start_update
             )
         ]
     )
@@ -326,7 +356,7 @@ def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=N
 
 # --- INTERFEJS (Flet) ---
 def main(page: ft.Page):
-    page.title = "ADHD Master & Daily"
+    page.title = f"ADHD Master & Daily (v{APP_VERSION})"
     page.window.width = 950
     page.window.height = 760
     page.padding = 0
@@ -528,12 +558,22 @@ def main(page: ft.Page):
                                       on_accept=lambda e: (highlight_nav(master_nav_box, False),
                                                            move_task_between_lists(resolve_dragged_task_id(e), 0)))
 
+    version_badge = ft.Text(f"📱 Wersja: v{APP_VERSION}", size=11, color=ft.Colors.GREY_400, weight=ft.FontWeight.BOLD)
     sync_badge = ft.Text("", size=11, color=ft.Colors.GREY_500)
 
-    sidebar = ft.Container(width=200, bgcolor="#16181d", padding=15, content=ft.Column(
-        [ft.Text("Nawigacja", size=12, color=ft.Colors.GREY_500), daily_nav_target, master_nav_target,
-         ft.Container(expand=True), sync_badge, ft.Divider(height=1, color=ft.Colors.GREY_800), settings_nav_box],
-        expand=True, spacing=6))
+    sidebar = ft.Container(
+        width=200, bgcolor="#16181d", padding=15,
+        content=ft.Column([
+            ft.Text("Nawigacja", size=12, color=ft.Colors.GREY_500),
+            daily_nav_target,
+            master_nav_target,
+            ft.Container(expand=True),
+            version_badge,
+            sync_badge,
+            ft.Divider(height=1, color=ft.Colors.GREY_800),
+            settings_nav_box
+        ], expand=True, spacing=6)
+    )
     content_column = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
     content_area = ft.Container(content=content_column, expand=True, padding=25)
 
@@ -583,7 +623,7 @@ def main(page: ft.Page):
         routines_row.controls.clear()
 
         if current_view == "settings":
-            title_text.value = "Ustawienia i Rutyny"
+            title_text.value = f"Ustawienia (v{APP_VERSION})"
             rout_db = get_routines()
             rout_list = ft.Column([ft.Row([ft.Text(r[1]), ft.IconButton(icon=ft.Icons.DELETE, icon_size=16,
                                                                         on_click=lambda e, rid=r[0]: (

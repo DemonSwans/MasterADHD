@@ -4,10 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add draggable task handles, update UI alignment, and increment app version to 1.1">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add comment marker to separate main script execution">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -27,6 +26,11 @@
     </option>
   </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="main" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="GitHubPullRequestSearchHistory">{
@@ -47,23 +51,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0004280301373614" />
-      <entry key="MS500" value="1.211979991158287" />
-      <entry key="S2" value="1.6785372860812586" />
-      <entry key="S5" value="1.8563069856730943" />
-      <entry key="S10" value="1.9253685674762755" />
-      <entry key="S30" value="1.9744769730316074" />
-      <entry key="S60" value="1.987156002378351" />
-      <entry key="M2" value="1.9935572466538358" />
-      <entry key="M5" value="1.9974183306690187" />
-      <entry key="M10" value="2.000020021427588" />
-      <entry key="M15" value="2.0181619234001764" />
-      <entry key="M30" value="2.2754192777666677" />
-      <entry key="H1" value="3.0502129040519765" />
-      <entry key="H2" value="4.0497002428912445" />
-      <entry key="H4" value="4.863376168457387" />
-      <entry key="D1" value="5.783235622580083" />
-      <entry key="W1" value="5.968289436045032" />
+      <entry key="MS100" value="1.000000000805163" />
+      <entry key="MS500" value="1.0151766796180262" />
+      <entry key="S2" value="1.3528437011630394" />
+      <entry key="S5" value="1.8433313234817574" />
+      <entry key="S10" value="2.6724014875964217" />
+      <entry key="S30" value="4.336559510158331" />
+      <entry key="S60" value="5.149592195695106" />
+      <entry key="M2" value="5.901790148123925" />
+      <entry key="M5" value="7.037836192442435" />
+      <entry key="M10" value="7.805068834101495" />
+      <entry key="M15" value="8.156582353808584" />
+      <entry key="M30" value="8.766710006776698" />
+      <entry key="H1" value="9.715595574515726" />
+      <entry key="H2" value="10.832629426236663" />
+      <entry key="H4" value="11.734616554670241" />
+      <entry key="D1" value="12.75795365128815" />
+      <entry key="W1" value="12.964567625114285" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -85,23 +89,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.9730655413650462" />
-      <entry key="MS500" value="1.204694272486643" />
-      <entry key="S2" value="1.675742439569475" />
-      <entry key="S5" value="1.8550406616547046" />
-      <entry key="S10" value="1.9247065770848337" />
-      <entry key="S30" value="1.9742494758481943" />
-      <entry key="S60" value="1.9870413715653443" />
-      <entry key="M2" value="1.9934997085412114" />
-      <entry key="M5" value="1.9973952616766681" />
-      <entry key="M10" value="2.000008446704343" />
-      <entry key="M15" value="2.0181539229669543" />
-      <entry key="M30" value="2.2754132281961517" />
-      <entry key="H1" value="3.050206786400492" />
-      <entry key="H2" value="4.049695187580016" />
-      <entry key="H4" value="4.863372827826538" />
-      <entry key="D1" value="5.783234912593644" />
-      <entry key="W1" value="5.968289330214552" />
+      <entry key="MS100" value="0.9592641199397081" />
+      <entry key="MS500" value="1.0060946627794938" />
+      <entry key="S2" value="1.3460510348193224" />
+      <entry key="S5" value="1.8388245235941278" />
+      <entry key="S10" value="2.6694978486367353" />
+      <entry key="S30" value="4.335276469641063" />
+      <entry key="S60" value="5.148737009674951" />
+      <entry key="M2" value="5.901126318218675" />
+      <entry key="M5" value="7.037423427120937" />
+      <entry key="M10" value="7.804821849190179" />
+      <entry key="M15" value="8.156406717149173" />
+      <entry key="M30" value="8.766614558351998" />
+      <entry key="H1" value="9.715543361844418" />
+      <entry key="H2" value="10.832600912920686" />
+      <entry key="H4" value="11.734601352856131" />
+      <entry key="D1" value="12.757950941099406" />
+      <entry key="W1" value="12.964567232878112" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -113,27 +117,27 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;Python tests.Python tests in test_app.py.executor&quot;: &quot;Run&quot;,
-    &quot;Python.main.executor&quot;: &quot;Run&quot;,
-    &quot;Python.test_app.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;python.packages.toolwindow.project.migrated.to.right.top.v2&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python tests.Python tests in test_app.py.executor": "Run",
+    "Python.main.executor": "Run",
+    "Python.test_app.executor": "Run",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "master",
+    "ignore.virus.scanning.warn.message": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "python.packages.toolwindow.project.migrated.to.right.top.v2": "true"
   }
-}</component>
+}]]></component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -150,7 +154,7 @@
       <option name="presentableId" value="Default" />
       <updated>1792105691165</updated>
       <workItem from="1792159635957" duration="6650000" />
-      <workItem from="1792274222548" duration="467000" />
+      <workItem from="1792274222548" duration="1865000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -240,7 +244,39 @@
       <option name="project" value="LOCAL" />
       <updated>1792167830201</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="Refactor update checker to support both main and master branches, enhance task UI with draggable handles, and add comprehensive pytest tests.">
+      <option name="closed" value="true" />
+      <created>1792274729706</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1792274729706</updated>
+    </task>
+    <task id="LOCAL-00013" summary="Refactor update checker to support both main and master branches, enhance task UI with draggable handles, and add comprehensive pytest tests.">
+      <option name="closed" value="true" />
+      <created>1792274735170</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1792274735170</updated>
+    </task>
+    <task id="LOCAL-00014" summary="Add comment marker to separate main script execution">
+      <option name="closed" value="true" />
+      <created>1792274949931</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1792274949931</updated>
+    </task>
+    <task id="LOCAL-00015" summary="Add comment marker to separate main script execution">
+      <option name="closed" value="true" />
+      <created>1792275123144</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1792275123144</updated>
+    </task>
+    <option name="localTasksCounter" value="16" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -267,7 +303,9 @@
     <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and adjust APK naming process." />
     <MESSAGE value="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check." />
     <MESSAGE value="Add draggable task handles, update UI alignment, and increment app version to 1.1" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add draggable task handles, update UI alignment, and increment app version to 1.1" />
+    <MESSAGE value="Refactor update checker to support both main and master branches, enhance task UI with draggable handles, and add comprehensive pytest tests." />
+    <MESSAGE value="Add comment marker to separate main script execution" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add comment marker to separate main script execution" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792274545340" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
