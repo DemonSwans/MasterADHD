@@ -22,7 +22,7 @@ def get_local_version():
                 return f.read().strip()
     except Exception:
         pass
-    return "1.2.1"
+    return "1.3.0"
 
 
 APP_VERSION = get_local_version()
@@ -54,7 +54,7 @@ def set_config(key, value):
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
 
 
-# --- SYSTEM AKTUALIZACJI BEZ BLOKAD SAMSUNG ---
+# --- SYSTEM AKTUALIZACJI ---
 def check_for_updates(page: ft.Page):
     ts = datetime.now().timestamp()
     urls = [
@@ -94,25 +94,21 @@ def show_update_dialog(page: ft.Page, new_version: str):
         dialog.open = False
         page.update()
 
-    def start_update(e):
-        close_dialog(e)
-        # Otwieramy link bezpośrednio – system Android na Samsungu przejmie pobieranie i zapyta raz o uprawnienie instalacji, które od teraz zapamięta
-        page.launch_url(apk_url)
-
     dialog = ft.AlertDialog(
         title=ft.Text("🚀 Dostępna nowa wersja!"),
         content=ft.Text(
             f"Twoja wersja: v{APP_VERSION}\n"
             f"Nowa wersja: v{new_version}\n\n"
-            f"Aktualizacja w tle dla Samsunga gotowa."
+            f"Kliknij 'Aktualizuj', aby pobrać i zainstalować nową paczkę."
         ),
         actions=[
             ft.TextButton("Później", on_click=close_dialog),
             ft.Button(
-                "Aktualizuj teraz",
+                "Aktualizuj",
+                url=apk_url,
                 bgcolor=ft.Colors.GREEN_700,
                 color=ft.Colors.WHITE,
-                on_click=start_update
+                on_click=close_dialog
             )
         ]
     )
@@ -360,6 +356,7 @@ def main(page: ft.Page):
     page.window.width = 950
     page.window.height = 760
     page.padding = 0
+    page.bgcolor = "#111318"
     page.theme_mode = ft.ThemeMode.DARK
     init_db()
 
@@ -371,17 +368,21 @@ def main(page: ft.Page):
     active_drag_task_id = None
     active_subtask_idx_map = {}
 
+    def is_mobile():
+        w = getattr(page, "width", None) or getattr(page.window, "width", 950) or 950
+        return w < 650
+
     priority_colors = {"A": ft.Colors.RED_500, "B": ft.Colors.AMBER_700, "C": ft.Colors.BLUE_500}
 
     tasks_column = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=8)
-    routines_row = ft.Row(wrap=True, spacing=10)
+    routines_row = ft.Row(wrap=True, spacing=8)
 
     progress_bar = ft.ProgressBar(value=0.0, color=ft.Colors.GREEN_500, bgcolor=ft.Colors.GREY_800, height=8)
     progress_text = ft.Text("Postęp dnia: 0%", size=12, color=ft.Colors.GREY_400)
 
     status_text = ft.Text("", size=12, color=ft.Colors.GREEN_400)
     warning_text = ft.Text("", size=12, color=ft.Colors.RED_400)
-    title_text = ft.Text("Daily", size=24, weight=ft.FontWeight.BOLD)
+    title_text = ft.Text("Daily", size=22, weight=ft.FontWeight.BOLD)
 
     ha_url_input = ft.TextField(label="Adres serwera HA", value=get_config("ha_url", ""))
     folder_input = ft.TextField(label="Ścieżka folderu (wymagana przed włączeniem)",
@@ -526,7 +527,7 @@ def main(page: ft.Page):
         warning_text.value = ""
         refresh_view()
 
-    # --- MENU BOCZNE ---
+    # --- NAWIGACJA (PC + MOBILE) ---
     def switch_view(view_name):
         nonlocal current_view, open_prio_task_id
         current_view = view_name
@@ -535,27 +536,53 @@ def main(page: ft.Page):
         if view_name in ("daily", "master"): pull_database()
         refresh_view()
 
-    def create_nav(icon, label, view):
-        return ft.Container(padding=10, border_radius=8, on_click=lambda e: switch_view(view),
-                            content=ft.Row([ft.Icon(icon, size=20), ft.Text(label, size=15)], spacing=12))
-
-    daily_nav_box = create_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily")
-    master_nav_box = create_nav(ft.Icons.LIST_ALT, "Master", "master")
-    settings_nav_box = create_nav(ft.Icons.SETTINGS_OUTLINED, "Ustawienia", "settings")
-
     def highlight_nav(box, is_hover, default_border=None):
         box.border = ft.Border.all(2, ft.Colors.AMBER_400) if is_hover else default_border
         page.update()
 
-    daily_nav_target = ft.DragTarget(group="tasks", content=daily_nav_box,
-                                     on_will_accept=lambda e: highlight_nav(daily_nav_box, True),
-                                     on_leave=lambda e: highlight_nav(daily_nav_box, False),
-                                     on_accept=lambda e: (highlight_nav(daily_nav_box, False),
+    # Przyciski dla PC (Pasek boczny)
+    def create_pc_nav(icon, label, view):
+        return ft.Container(padding=10, border_radius=8, on_click=lambda e: switch_view(view),
+                            content=ft.Row([ft.Icon(icon, size=20), ft.Text(label, size=15)], spacing=12))
+
+    daily_pc_box = create_pc_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily")
+    master_pc_box = create_pc_nav(ft.Icons.LIST_ALT, "Master", "master")
+    settings_pc_box = create_pc_nav(ft.Icons.SETTINGS_OUTLINED, "Ustawienia", "settings")
+
+    daily_pc_target = ft.DragTarget(group="tasks", content=daily_pc_box,
+                                    on_will_accept=lambda e: highlight_nav(daily_pc_box, True),
+                                    on_leave=lambda e: highlight_nav(daily_pc_box, False),
+                                    on_accept=lambda e: (highlight_nav(daily_pc_box, False),
+                                                         move_task_between_lists(resolve_dragged_task_id(e), 1)))
+    master_pc_target = ft.DragTarget(group="tasks", content=master_pc_box,
+                                     on_will_accept=lambda e: highlight_nav(master_pc_box, True),
+                                     on_leave=lambda e: highlight_nav(master_pc_box, False),
+                                     on_accept=lambda e: (highlight_nav(master_pc_box, False),
+                                                          move_task_between_lists(resolve_dragged_task_id(e), 0)))
+
+    # Przyciski dla Telefonu (Dolny pasek)
+    def create_mob_nav(icon, label, view):
+        return ft.Container(
+            padding=ft.Padding.symmetric(vertical=8, horizontal=16),
+            border_radius=10,
+            on_click=lambda e: switch_view(view),
+            content=ft.Column([ft.Icon(icon, size=22), ft.Text(label, size=11)], alignment=ft.MainAxisAlignment.CENTER,
+                              horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2, tight=True)
+        )
+
+    daily_mob_box = create_mob_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily")
+    master_mob_box = create_mob_nav(ft.Icons.LIST_ALT, "Master", "master")
+    settings_mob_box = create_mob_nav(ft.Icons.SETTINGS_OUTLINED, "Opcje", "settings")
+
+    daily_mob_target = ft.DragTarget(group="tasks", content=daily_mob_box,
+                                     on_will_accept=lambda e: highlight_nav(daily_mob_box, True),
+                                     on_leave=lambda e: highlight_nav(daily_mob_box, False),
+                                     on_accept=lambda e: (highlight_nav(daily_mob_box, False),
                                                           move_task_between_lists(resolve_dragged_task_id(e), 1)))
-    master_nav_target = ft.DragTarget(group="tasks", content=master_nav_box,
-                                      on_will_accept=lambda e: highlight_nav(master_nav_box, True),
-                                      on_leave=lambda e: highlight_nav(master_nav_box, False),
-                                      on_accept=lambda e: (highlight_nav(master_nav_box, False),
+    master_mob_target = ft.DragTarget(group="tasks", content=master_mob_box,
+                                      on_will_accept=lambda e: highlight_nav(master_mob_box, True),
+                                      on_leave=lambda e: highlight_nav(master_mob_box, False),
+                                      on_accept=lambda e: (highlight_nav(master_mob_box, False),
                                                            move_task_between_lists(resolve_dragged_task_id(e), 0)))
 
     version_badge = ft.Text(f"📱 Wersja: v{APP_VERSION}", size=11, color=ft.Colors.GREY_400, weight=ft.FontWeight.BOLD)
@@ -565,17 +592,26 @@ def main(page: ft.Page):
         width=200, bgcolor="#16181d", padding=15,
         content=ft.Column([
             ft.Text("Nawigacja", size=12, color=ft.Colors.GREY_500),
-            daily_nav_target,
-            master_nav_target,
+            daily_pc_target,
+            master_pc_target,
             ft.Container(expand=True),
             version_badge,
             sync_badge,
             ft.Divider(height=1, color=ft.Colors.GREY_800),
-            settings_nav_box
+            settings_pc_box
         ], expand=True, spacing=6)
     )
+
+    bottom_nav = ft.Container(
+        bgcolor="#16181d",
+        padding=ft.Padding.symmetric(vertical=6, horizontal=10),
+        content=ft.Row([daily_mob_target, master_mob_target, settings_mob_box],
+                       alignment=ft.MainAxisAlignment.SPACE_AROUND)
+    )
+
     content_column = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
-    content_area = ft.Container(content=content_column, expand=True, padding=25)
+    content_area = ft.Container(content=content_column, expand=True, padding=15)
+    root_layout = ft.Container(expand=True)
 
     def toggle_prio_menu(task_id):
         nonlocal open_prio_task_id;
@@ -611,13 +647,23 @@ def main(page: ft.Page):
         refresh_view()
 
     def refresh_view():
-        daily_nav_box.bgcolor = ft.Colors.GREY_800 if current_view == "daily" else None
-        master_nav_box.bgcolor = ft.Colors.GREY_800 if current_view == "master" else None
-        settings_nav_box.bgcolor = ft.Colors.GREY_800 if current_view == "settings" else None
+        mob = is_mobile()
+        content_area.padding = 14 if mob else 25
+
+        for box, v in ((daily_pc_box, "daily"), (master_pc_box, "master"), (settings_pc_box, "settings"),
+                       (daily_mob_box, "daily"), (master_mob_box, "master"), (settings_mob_box, "settings")):
+            box.bgcolor = ft.Colors.GREY_800 if current_view == v else None
 
         mode = get_config("sync_mode", "none")
         sync_badge.value = "🏠 Sync: Serwer HA" if mode == "ha_server" else "📁 Sync: Dysk" if mode == "folder" else "💾 Tryb lokalny"
         sync_badge.color = ft.Colors.GREEN_400 if mode == "ha_server" else ft.Colors.BLUE_400 if mode == "folder" else ft.Colors.GREY_500
+
+        if mob:
+            root_layout.content = ft.Column([content_area, ft.Divider(height=1, color=ft.Colors.GREY_800), bottom_nav],
+                                            expand=True, spacing=0)
+        else:
+            root_layout.content = ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area],
+                                         expand=True, spacing=0)
 
         tasks_column.controls.clear()
         routines_row.controls.clear()
@@ -625,14 +671,16 @@ def main(page: ft.Page):
         if current_view == "settings":
             title_text.value = f"Ustawienia (v{APP_VERSION})"
             rout_db = get_routines()
-            rout_list = ft.Column([ft.Row([ft.Text(r[1]), ft.IconButton(icon=ft.Icons.DELETE, icon_size=16,
-                                                                        on_click=lambda e, rid=r[0]: (
-                                                                            delete_routine_db(rid), refresh_view()))])
-                                   for r in rout_db])
+            rout_list = ft.Column([ft.Row([ft.Text(r[1], expand=True), ft.IconButton(icon=ft.Icons.DELETE, icon_size=18,
+                                                                                     on_click=lambda e, rid=r[0]: (
+                                                                                         delete_routine_db(rid),
+                                                                                         refresh_view()))]) for r in
+                                   rout_db])
             content_column.controls = [
-                title_text, status_text, warning_text, ft.Divider(height=15),
+                ft.Row([title_text, ft.Container(expand=True), sync_badge if mob else ft.Container()]),
+                status_text, warning_text, ft.Divider(height=15),
                 ft.Text("Nawyki i Rutyny (Nie obciążają limitu A)", weight=ft.FontWeight.BOLD),
-                ft.Row([routine_input, ft.Button("Dodaj rutynę",
+                ft.Row([routine_input, ft.Button("Dodaj",
                                                  on_click=lambda e: (add_routine_db(routine_input.value.strip()),
                                                                      setattr(routine_input, 'value', ''),
                                                                      refresh_view()))]),
@@ -643,7 +691,7 @@ def main(page: ft.Page):
                               color=ft.Colors.WHITE, on_click=lambda e: (set_config("max_a_limit", 3), refresh_view())),
                     ft.Button("4", bgcolor=ft.Colors.AMBER_700 if max_a_limit == 4 else ft.Colors.GREY_800,
                               color=ft.Colors.WHITE, on_click=lambda e: (set_config("max_a_limit", 4), refresh_view())),
-                ]), ft.Divider(height=25),
+                ]), ft.Divider(height=20),
                 ft.Text("Synchronizacja", weight=ft.FontWeight.BOLD),
                 ha_url_input, ft.Button("Włącz HA", on_click=lambda e: change_sync_mode("ha_server")),
                 folder_input, ft.Button("Włącz Dysk", on_click=lambda e: change_sync_mode("folder")),
@@ -653,7 +701,7 @@ def main(page: ft.Page):
             return
 
         is_daily_mode = (current_view == "daily")
-        title_text.value = "Daily" if is_daily_mode else "Master Lista (Projekty i Zadania)"
+        title_text.value = "Daily" if is_daily_mode else "Master Lista"
         all_view_tasks = get_tasks(is_daily_view=is_daily_mode)
         all_routines = get_routines()
 
@@ -677,14 +725,14 @@ def main(page: ft.Page):
 
             prio_items = [ft.Container(
                 content=ft.Row([ft.Text(prio, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=14)],
-                               alignment=ft.MainAxisAlignment.CENTER), width=36, height=32, border_radius=6,
+                               alignment=ft.MainAxisAlignment.CENTER), width=34, height=32, border_radius=6,
                 bgcolor=priority_colors[prio] if not is_done else ft.Colors.GREY_700,
                 on_click=lambda e, tid=task_id: toggle_prio_menu(tid))]
             if open_prio_task_id == task_id:
                 for other_p in ("A", "B", "C"):
                     if other_p != prio: prio_items.append(ft.Container(
                         content=ft.Row([ft.Text(other_p, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=13)],
-                                       alignment=ft.MainAxisAlignment.CENTER), width=36, height=28,
+                                       alignment=ft.MainAxisAlignment.CENTER), width=34, height=28,
                         bgcolor=priority_colors[other_p], border_radius=6,
                         on_click=lambda e, tid=task_id, np=other_p, idm=is_daily_mode: change_priority(tid, np, idm)))
 
@@ -769,18 +817,24 @@ def main(page: ft.Page):
                     title_row_controls.append(ft.Icon(ft.Icons.WB_SUNNY, size=18, color=ft.Colors.AMBER_400,
                                                       tooltip="Zadanie jest na liście Daily"))
 
-                title_row_controls.append(
-                    ft.TextButton("👣 Dodaj krok", icon=ft.Icons.ADD,
-                                  on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs))
-                )
+                if mob:
+                    title_row_controls.append(
+                        ft.IconButton(icon=ft.Icons.ADD, icon_size=20, tooltip="Dodaj krok",
+                                      on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs))
+                    )
+                else:
+                    title_row_controls.append(
+                        ft.TextButton("👣 Dodaj krok", icon=ft.Icons.ADD,
+                                      on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs))
+                    )
                 title_row_controls.append(drag_handle)
 
                 subtask_controls = []
                 for idx, st in enumerate(subtasks):
-                    subtask_controls.append(ft.Row(controls=[ft.Container(width=40),
+                    subtask_controls.append(ft.Row(controls=[ft.Container(width=36),
                                                              ft.Checkbox(label=st["title"], value=bool(st["is_done"]),
-                                                                         label_style=ft.TextStyle(size=13,
-                                                                                                  color=ft.Colors.GREY_300),
+                                                                         expand=True, label_style=ft.TextStyle(size=13,
+                                                                                                               color=ft.Colors.GREY_300),
                                                                          on_change=lambda e, tid=task_id, subs=subtasks,
                                                                                           i=idx: handle_task_check(tid,
                                                                                                                    e.control.value,
@@ -796,17 +850,20 @@ def main(page: ft.Page):
 
             tasks_column.controls.append(task_content)
 
-        top_right_button = ft.Button("⚡ Szybka myśl", bgcolor=ft.Colors.GREY_800, color=ft.Colors.WHITE,
-                                     on_click=open_quick_modal) if is_daily_mode else ft.Button(
-            "➕ Dodaj Projekt / Zadanie", bgcolor=ft.Colors.GREY_800, color=ft.Colors.WHITE, on_click=open_master_modal)
+        if is_daily_mode:
+            top_right_button = ft.Button("⚡ Myśl" if mob else "⚡ Szybka myśl", bgcolor=ft.Colors.GREY_800,
+                                         color=ft.Colors.WHITE, on_click=open_quick_modal)
+        else:
+            top_right_button = ft.Button("➕ Dodaj" if mob else "➕ Dodaj Projekt / Zadanie", bgcolor=ft.Colors.GREY_800,
+                                         color=ft.Colors.WHITE, on_click=open_master_modal)
 
         elements = [ft.Row([title_text, ft.Container(expand=True),
                             ft.IconButton(ft.Icons.SYNC, on_click=lambda e: (pull_database(), refresh_view())),
                             top_right_button])]
         if is_daily_mode:
-            elements.extend([progress_bar, progress_text, ft.Divider(height=10)])
+            elements.extend([progress_bar, progress_text, ft.Divider(height=8)])
             if all_routines: elements.extend(
-                [ft.Text("Nawyki i Rutyny:", size=13, weight=ft.FontWeight.BOLD), routines_row, ft.Divider(height=10)])
+                [ft.Text("Nawyki i Rutyny:", size=13, weight=ft.FontWeight.BOLD), routines_row, ft.Divider(height=8)])
         elements.extend([status_text, warning_text, tasks_column])
         content_column.controls = elements
 
@@ -816,10 +873,9 @@ def main(page: ft.Page):
 
         page.update()
 
-    page.add(
-        ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area], expand=True, spacing=0))
+    page.on_resize = lambda e: refresh_view()
+    page.add(ft.SafeArea(content=root_layout, expand=True))
     refresh_view()
-
 
 if __name__ == "__main__":
     ft.run(main)

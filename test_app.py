@@ -2,24 +2,59 @@ import gc
 import os
 import shutil
 import pytest
+import flet as ft
 import main
 
 
-# --- PRZYGOTOWANIE I SPRZĄTANIE ŚRODOWISKA (Kompatybilne z Windows) ---
+# --- SYMULATOR STRONY I ZDARZEŃ FLET ---
+class DummyWindow:
+    width = 950
+    height = 760
+
+
+class DummyEvent:
+    def __init__(self, src_id="1", control_val=True):
+        self.src_id = src_id
+        self.control = type("Ctrl", (), {"value": control_val})()
+
+
+class DummyPage:
+    def __init__(self, width=950):
+        self.title = ""
+        self.width = width
+        self.window = DummyWindow()
+        self.window.width = width
+        self.padding = 0
+        self.bgcolor = None
+        self.theme_mode = None
+        self.overlay = []
+        self.controls = []
+        self.on_resize = None
+
+    def add(self, *controls):
+        self.controls.extend(controls)
+
+    def update(self):
+        pass
+
+    def get_control(self, src_id):
+        return None
+
+
+# --- PRZYGOTOWANIE I SPRZĄTANIE ŚRODOWISKA ---
 @pytest.fixture(autouse=True)
-def setup_and_teardown(tmp_path):
-    # Każdy test dostaje własny, unikalny folder tymczasowy (brak konfliktów blokad na Windowsie)
+def setup_and_teardown(tmp_path, monkeypatch):
     test_db = str(tmp_path / "test_tasks.db")
     test_config = str(tmp_path / "test_config.db")
 
     main.LOCAL_DB = test_db
     main.CONFIG_DB = test_config
+    monkeypatch.setattr(main, "check_for_updates", lambda page: None)
 
     main.init_db()
 
     yield tmp_path
 
-    # Wymuszenie zamknięcia wiszących połączeń SQLite w pamięci Pythona na Windowsie
     gc.collect()
 
 
@@ -153,6 +188,61 @@ def test_folder_sync_and_archive(setup_and_teardown):
     assert os.path.exists(archive_dir)
     assert len(os.listdir(archive_dir)) >= 1
 
-#a
+
+# --- 8. TEST PORÓWNYWANIA WERSJI ---
+def test_version_comparison():
+    assert main.is_newer_version("1.3.0", "1.2.1") is True
+    assert main.is_newer_version("1.3.0", "1.3.0") is False
+    assert main.is_newer_version("1.2.1", "1.3.0") is False
+    assert main.is_newer_version("2.0", "1.9.9") is True
+
+
+# --- 9. TEST INTERFEJSU PC I TELEFONU + WYWOŁANIE LAMBD (Drag & Drop, Kliknięcia) ---
+def test_interactive_callbacks_and_drag_drop():
+    main.add_task_db("Zadanie Testowe", is_daily=1, priority="B")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+
+    # 1. Test na szerokim ekranie (PC)
+    page_pc = DummyPage(width=950)
+    main.main(page_pc)
+
+    root_pc = page_pc.controls[0].content
+    assert isinstance(root_pc.content, ft.Row)
+
+    sidebar_col = root_pc.content.controls[0].content
+    daily_pc_target = sidebar_col.controls[1]
+    master_pc_target = sidebar_col.controls[2]
+
+    # Odpalamy wszystkie uśpione lambdy w DragTarget na PC (tu kryła się literówka!)
+    dummy_ev = DummyEvent(src_id=str(task_id))
+    for target in (daily_pc_target, master_pc_target):
+        target.on_will_accept(dummy_ev)
+        target.on_leave(dummy_ev)
+        target.on_accept(dummy_ev)
+
+    # 2. Test na wąskim ekranie (Telefon)
+    page_mob = DummyPage(width=400)
+    main.main(page_mob)
+
+    root_mob = page_mob.controls[0].content
+    assert isinstance(root_mob.content, ft.Column)
+
+    bottom_nav_row = root_mob.content.controls[2].content
+    daily_mob_target = bottom_nav_row.controls[0]
+    master_mob_target = bottom_nav_row.controls[1]
+    settings_mob_box = bottom_nav_row.controls[2]
+
+    # Odpalamy wszystkie uśpione lambdy w DragTarget na Telefonie
+    for target in (daily_mob_target, master_mob_target):
+        target.on_will_accept(dummy_ev)
+        target.on_leave(dummy_ev)
+        target.on_accept(dummy_ev)
+
+    # Przeklikanie wszystkich zakładek na telefonie
+    master_mob_target.content.on_click(None)
+    settings_mob_box.on_click(None)
+    daily_mob_target.content.on_click(None)
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
