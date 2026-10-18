@@ -2,7 +2,7 @@ name: Zbuduj i Opublikuj APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -33,8 +33,8 @@ jobs:
       - name: Uruchom testy (pytest)
         run: pytest test_app.py -v
 
-      - name: Budowanie APK (Ominięcie pytania)
-        run: yes | flet build apk
+      - name: Budowanie APK (Tylko 64-bit dla nowoczesnych telefonów)
+        run: yes | flet build apk --arch arm64-v8a
 
       - name: Zmień nazwę na stałą
         run: find build/apk -name "*.apk" -exec mv {} MasterADHD.apk \;
