@@ -482,6 +482,23 @@ def main(page: ft.Page):
         warning_text.value = "" if ok else f"⚠️ {msg}"
         refresh_view()
 
+    def trigger_manual_ota(e=None):
+        try:
+            import main
+            status_text.value = "⏳ Sprawdzanie i pobieranie najnowszej wersji z GitHuba..."
+            page.update()
+            updated, ver = main.check_and_download_ota(force=True)
+            if updated:
+                status_text.value = f"✓ Pomyślnie pobrano wersję v{ver}! Uruchom aplikację ponownie, aby wczytać nowy moduł."
+                warning_text.value = ""
+            else:
+                status_text.value = f"ℹ️ Kod zweryfikowany z GitHub (wersja: v{ver})."
+                warning_text.value = ""
+            refresh_view()
+        except Exception as ex:
+            warning_text.value = f"Błąd OTA: {ex}"
+            refresh_view()
+
     # --- SZYBKIE WPROWADZANIE (Inline Quick Input) ---
     inline_input_field = ft.TextField(
         hint_text="⚡ Błyskawiczny zrzut myśli (Enter aby zapisać)...",
@@ -912,9 +929,23 @@ def main(page: ft.Page):
                 ], spacing=8)
             )
 
+            card_ota = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.SYSTEM_UPDATE_ALT, size=18, color=COLOR_PRIO_B),
+                        ft.Text("Aktualizacje OTA (GitHub)", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
+                    ], spacing=8),
+                    ft.Text(f"Wersja wbudowana: v{FALLBACK_VERSION} | Aktywna: v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                              on_click=trigger_manual_ota)
+                ], spacing=10)
+            )
+
             content_column.controls = [
                 ft.Row([title_text, ft.Container(expand=True), sync_badge if mob else ft.Container()]),
                 status_text, warning_text,
+                card_ota,
                 card_routines,
                 card_limits,
                 card_gist,

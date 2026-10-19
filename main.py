@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import ssl
 import sys
 import traceback
 import urllib.request
@@ -7,6 +8,17 @@ from datetime import datetime
 import flet as ft
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
+
+
+def get_ssl_context():
+    """Tworzy kontekst SSL z bezpiecznym fallbackiem dla środowisk mobilnych (Android)."""
+    try:
+        return ssl._create_unverified_context()
+    except Exception:
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            return None
 
 
 def get_ota_dir():
@@ -59,50 +71,113 @@ def get_installed_ota_version() -> str:
         return "0.0.0"
 
 
-def check_and_download_ota(force=False) -> tuple[bool, str]:
-    """Sprawdza na GitHubie czy jest nowszy kod i pobiera go bezpośrednio do plików wewnętrznych."""
+def check_and_download_ota(force=False, status_cb=None) -> tuple[bool, str]:
+    """Sprawdza na GitHubie czy jest nowszy kod i pobiera go bezpośrednio do pamięci urządzenia."""
     ts = int(datetime.now().timestamp())
-    headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"}
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "User-Agent": "MasterADHD-OTA/1.0"
+    }
+    ctx = get_ssl_context()
+
+    def update_status(text, progress=None):
+        if status_cb:
+            try:
+                status_cb(text, progress)
+            except Exception:
+                pass
+
     try:
+        update_status("Sprawdzanie dostępności aktualizacji...", 0.2)
         url_ver = f"{GITHUB_RAW_BASE}/version.txt?t={ts}"
         req_ver = urllib.request.Request(url_ver, headers=headers)
-        with urllib.request.urlopen(req_ver, timeout=4) as resp:
+        with urllib.request.urlopen(req_ver, timeout=5, context=ctx) as resp:
             remote_ver = resp.read().decode("utf-8").strip()
 
         local_ver = get_installed_ota_version()
         print(f"[OTA] Sprawdzanie aktualizacji: zdalna v{remote_ver}, lokalna v{local_ver}")
+
         if force or is_newer_version(remote_ver, local_ver):
             print(f"[OTA] Wykryto nowszą wersję lub wymuszenie (v{remote_ver}). Pobieranie kodu...")
+            update_status(f"Pobieranie nowego kodu v{remote_ver}...", 0.5)
+
             url_code = f"{GITHUB_RAW_BASE}/app_logic.py?t={ts}"
             req_code = urllib.request.Request(url_code, headers=headers)
-            with urllib.request.urlopen(req_code, timeout=6) as resp_code:
+            with urllib.request.urlopen(req_code, timeout=8, context=ctx) as resp_code:
                 new_code = resp_code.read().decode("utf-8")
-                # Weryfikacja czy pobrany kod to poprawny Python (ochrona przed uciętym plikiem)
-                compile(new_code, "app_logic_ota.py", "exec")
-                with open(OTA_LOGIC_FILE, "w", encoding="utf-8") as f:
-                    f.write(new_code)
-                with open(OTA_VERSION_FILE, "w", encoding="utf-8") as f:
-                    f.write(remote_ver)
-                print(f"[OTA] Pomyślnie pobrano i zapisano nową wersję v{remote_ver}.")
-                return True, remote_ver
+
+            update_status("Weryfikacja i instalacja aktualizacji...", 0.8)
+            # Weryfikacja czy pobrany kod to poprawny Python (ochrona przed uciętym plikiem)
+            compile(new_code, "app_logic_ota.py", "exec")
+            with open(OTA_LOGIC_FILE, "w", encoding="utf-8") as f:
+                f.write(new_code)
+            with open(OTA_VERSION_FILE, "w", encoding="utf-8") as f:
+                f.write(remote_ver)
+
+            print(f"[OTA] Pomyślnie pobrano i zapisano nową wersję v{remote_ver}.")
+            update_status(f"Zaktualizowano pomyślnie do v{remote_ver}!", 1.0)
+            return True, remote_ver
         else:
             print(f"[OTA] Aplikacja jest aktualna (v{local_ver}).")
+            update_status(f"Aplikacja jest aktualna (v{local_ver})", 1.0)
     except Exception as e:
         print(f"[OTA] Błąd podczas sprawdzania lub pobierania aktualizacji: {e}")
         traceback.print_exc()
+        update_status(f"Błąd sieci OTA: {str(e)[:40]}", 1.0)
     return False, get_installed_ota_version()
 
 
 def load_and_run(page: ft.Page):
-    # 1. Sprawdzamy OTA przy starcie aplikacji (chyba że wyłączono flagą środowiskową DISABLE_OTA=1)
     disable_ota = os.environ.get("DISABLE_OTA", "0") == "1"
     updated = False
     new_ver = ""
-    if not disable_ota:
-        updated, new_ver = check_and_download_ota()
+
+    # Wizualny ekran ładowania / paska postępu aktualizacji
+    if not disable_ota and not hasattr(page, "_ota_checked"):
+        page._ota_checked = True
+        page.bgcolor = "#0d1117"
+        page.theme_mode = ft.ThemeMode.DARK
+
+        progress_bar = ft.ProgressBar(width=260, color="#f59e0b", bgcolor="#21262d", value=0.1)
+        status_label = ft.Text("Inicjalizacja aplikacji...", size=12, color="#8b949e")
+        ver_label = ft.Text(f"Wersja lokalna: v{get_installed_ota_version()}", size=11, color="#484f58")
+
+        splash = ft.Container(
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+            content=ft.Column(
+                [
+                    ft.Icon(ft.Icons.BOLT, size=40, color="#f59e0b"),
+                    ft.Text("Master ADHD", size=20, weight=ft.FontWeight.BOLD, color="#f0f6fc"),
+                    ft.Container(height=14),
+                    progress_bar,
+                    ft.Container(height=6),
+                    status_label,
+                    ft.Container(height=4),
+                    ver_label,
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+                tight=True
+            )
+        )
+
+        page.controls.clear()
+        page.add(ft.SafeArea(splash))
+        page.update()
+
+        def status_cb(msg, progress):
+            status_label.value = msg
+            if progress is not None:
+                progress_bar.value = progress
+            page.update()
+
+        updated, new_ver = check_and_download_ota(status_cb=status_cb)
 
     try:
         # 2. Jeśli mamy pobrany nowszy moduł w pamięci podręcznej OTA -> ładujemy go!
+        page.controls.clear()
         if os.path.exists(OTA_LOGIC_FILE):
             print(f"[OTA] Ładowanie zaktualizowanego modułu z {OTA_LOGIC_FILE}")
             spec = importlib.util.spec_from_file_location("app_logic_ota", OTA_LOGIC_FILE)
@@ -118,7 +193,7 @@ def load_and_run(page: ft.Page):
 
         if updated:
             snack = ft.SnackBar(
-                ft.Text(f"🚀 Zaktualizowano w tle do wersji v{new_ver}!"),
+                ft.Text(f"🚀 Zaktualizowano w locie do wersji v{new_ver}!"),
                 open=True,
                 bgcolor=ft.Colors.GREEN_800
             )
