@@ -38,12 +38,8 @@ jobs:
       - name: Uruchom testy (pytest)
         run: pytest test_app.py -v
 
-      - name: Budowanie APK (64-bit + Uprawnienia pamięci)
-        run: |
-          yes | flet build apk --arch arm64-v8a \
-          --android-permissions android.permission.READ_EXTERNAL_STORAGE=True \
-          --android-permissions android.permission.WRITE_EXTERNAL_STORAGE=True \
-          --android-permissions android.permission.MANAGE_EXTERNAL_STORAGE=True
+      - name: Budowanie APK (64-bit)
+        run: yes | flet build apk --arch arm64-v8a
 
       - name: Zmień nazwę na stałą
         run: find build/apk -name "*.apk" -exec mv {} MasterADHD.apk \;

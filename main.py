@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import shutil
@@ -8,9 +9,23 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-LOCAL_DB = "tasks.db"
-CONFIG_DB = "app_config.db"
-FALLBACK_VERSION = "1.3.0"  # GitHub Actions automatycznie podmienia tę wartość z pliku version.txt!
+FALLBACK_VERSION = "1.4.0"
+
+
+# --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI (Brak wymogu uprawnień na Androidzie) ---
+def get_app_dir():
+    base = os.environ.get("FLET_APP_STORAGE_DATA") or os.path.expanduser("~")
+    app_dir = os.path.join(base, ".master_adhd_data")
+    try:
+        os.makedirs(app_dir, exist_ok=True)
+        return app_dir
+    except Exception:
+        return "."
+
+
+APP_DIR = get_app_dir()
+LOCAL_DB = os.path.join(APP_DIR, "tasks.db")
+CONFIG_DB = os.path.join(APP_DIR, "app_config.db")
 
 
 # --- ODCZYT WERSJI Z PLIKU ---
@@ -57,7 +72,7 @@ def set_config(key, value):
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
 
 
-# --- SYSTEM AKTUALIZACJI (Tylko gałąź master) ---
+# --- SYSTEM AKTUALIZACJI (Gałąź master) ---
 def check_for_updates(page: ft.Page):
     ts = int(datetime.now().timestamp())
     url = f"https://raw.githubusercontent.com/DemonSwans/MasterADHD/master/version.txt?t={ts}"
@@ -121,14 +136,54 @@ def show_update_dialog(page: ft.Page, new_version: str):
     page.update()
 
 
-# --- SYNCHRONIZACJA Z ARCHIWIZACJĄ ---
+# --- SYNCHRONIZACJA (Chmura Gist / HA / Folder) ---
 def is_valid_sqlite(file_data):
     return file_data.startswith(b"SQLite format 3")
 
 
 def pull_database():
     mode = get_config("sync_mode", "none")
-    if mode == "ha_server":
+
+    if mode == "gist":
+        token = get_config("gist_token", "").strip()
+        gist_id = get_config("gist_id", "").strip()
+        if not token:
+            return False, "Brak Tokenu GitHub!"
+        if not gist_id:
+            return True, "Gotowe do utworzenia nowej chmury"
+        try:
+            req = urllib.request.Request(
+                f"https://api.github.com/gists/{gist_id}",
+                method="GET",
+                headers={
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json",
+                    "Cache-Control": "no-cache"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    files = data.get("files", {})
+                    if "tasks.db.b64" in files:
+                        b64_content = files["tasks.db.b64"].get("content", "")
+                        raw_db = base64.b64decode(b64_content.encode("utf-8"))
+                        if is_valid_sqlite(raw_db):
+                            with open(LOCAL_DB, "wb") as f:
+                                f.write(raw_db)
+                            return True, "Pobrano bazę z Chmury"
+                        return False, "Odrzucono: Plik w chmurze jest uszkodzony"
+                    return True, "Chmura gotowa"
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return False, "Nie znaleziono Chmury o podanym ID!"
+            if e.code == 401:
+                return False, "Nieprawidłowy Token GitHub!"
+            return False, f"Błąd chmury: {e.code}"
+        except Exception as e:
+            return False, f"Brak połączenia z chmurą: {e}"
+
+    elif mode == "ha_server":
         url = get_config("ha_url", "").strip().rstrip("/")
         if not url: return False, "Brak adresu serwera HA"
         try:
@@ -170,7 +225,43 @@ def push_database():
     mode = get_config("sync_mode", "none")
     if not os.path.exists(LOCAL_DB): return False, ""
 
-    if mode == "ha_server":
+    if mode == "gist":
+        token = get_config("gist_token", "").strip()
+        gist_id = get_config("gist_id", "").strip()
+        if not token:
+            return False, "Brak Tokenu GitHub"
+        try:
+            with open(LOCAL_DB, "rb") as f:
+                b64_str = base64.b64encode(f.read()).decode("utf-8")
+            payload = json.dumps({
+                "description": "MasterADHD Cloud Database Sync",
+                "public": False,
+                "files": {"tasks.db.b64": {"content": b64_str}}
+            }).encode("utf-8")
+
+            url = f"https://api.github.com/gists/{gist_id}" if gist_id else "https://api.github.com/gists"
+            method = "PATCH" if gist_id else "POST"
+
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                method=method,
+                headers={
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json",
+                    "Content-Type": "application/json"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status in (200, 201):
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    if not gist_id and "id" in res_data:
+                        set_config("gist_id", res_data["id"])
+                    return True, "Zapisano w Chmurze"
+        except Exception as e:
+            return False, f"Błąd zapisu w chmurze: {e}"
+
+    elif mode == "ha_server":
         url = get_config("ha_url", "").strip().rstrip("/")
         if not url: return False, "Brak adresu"
         try:
@@ -388,13 +479,17 @@ def main(page: ft.Page):
     warning_text = ft.Text("", size=12, color=ft.Colors.RED_400)
     title_text = ft.Text("Daily", size=22, weight=ft.FontWeight.BOLD)
 
+    gist_token_input = ft.TextField(label="Token GitHub (uprawnienie 'gist')", value=get_config("gist_token", ""),
+                                    password=True, can_reveal_password=True)
+    gist_id_input = ft.TextField(label="ID Chmury (Zostaw puste, aby utworzyć nową)", value=get_config("gist_id", ""))
     ha_url_input = ft.TextField(label="Adres serwera HA", value=get_config("ha_url", ""))
-    folder_input = ft.TextField(label="Ścieżka folderu (wymagana przed włączeniem)",
-                                value=get_config("sync_folder", ""))
+    folder_input = ft.TextField(label="Ścieżka folderu lokalnego (PC)", value=get_config("sync_folder", ""))
     routine_input = ft.TextField(label="Nowa rutyna (np. Leki, Woda)", expand=True)
 
     def change_sync_mode(mode_name):
         set_config("sync_mode", mode_name)
+        set_config("gist_token", gist_token_input.value.strip())
+        set_config("gist_id", gist_id_input.value.strip())
         set_config("ha_url", ha_url_input.value.strip())
         set_config("sync_folder", folder_input.value.strip())
         ok, msg = pull_database()
@@ -404,8 +499,9 @@ def main(page: ft.Page):
             warning_text.value = f"⚠️ {msg} (Zresetowano do trybu lokalnego)"
             status_text.value = ""
         else:
-            push_database()
-            status_text.value = f"✓ {msg}"
+            push_ok, push_msg = push_database()
+            gist_id_input.value = get_config("gist_id", "")
+            status_text.value = f"✓ {push_msg or msg}"
             warning_text.value = ""
 
         refresh_view()
@@ -544,7 +640,6 @@ def main(page: ft.Page):
         box.border = ft.Border.all(2, ft.Colors.AMBER_400) if is_hover else default_border
         page.update()
 
-    # Przyciski dla PC (Pasek boczny)
     def create_pc_nav(icon, label, view):
         return ft.Container(padding=10, border_radius=8, on_click=lambda e: switch_view(view),
                             content=ft.Row([ft.Icon(icon, size=20), ft.Text(label, size=15)], spacing=12))
@@ -564,7 +659,6 @@ def main(page: ft.Page):
                                      on_accept=lambda e: (highlight_nav(master_pc_box, False),
                                                           move_task_between_lists(resolve_dragged_task_id(e), 0)))
 
-    # Przyciski dla Telefonu (Dolny pasek)
     def create_mob_nav(icon, label, view):
         return ft.Container(
             padding=ft.Padding.symmetric(vertical=8, horizontal=16),
@@ -659,8 +753,18 @@ def main(page: ft.Page):
             box.bgcolor = ft.Colors.GREY_800 if current_view == v else None
 
         mode = get_config("sync_mode", "none")
-        sync_badge.value = "🏠 Sync: Serwer HA" if mode == "ha_server" else "📁 Sync: Dysk" if mode == "folder" else "💾 Tryb lokalny"
-        sync_badge.color = ft.Colors.GREEN_400 if mode == "ha_server" else ft.Colors.BLUE_400 if mode == "folder" else ft.Colors.GREY_500
+        if mode == "gist":
+            sync_badge.value = "☁️ Sync: Chmura"
+            sync_badge.color = ft.Colors.CYAN_400
+        elif mode == "ha_server":
+            sync_badge.value = "🏠 Sync: Serwer HA"
+            sync_badge.color = ft.Colors.GREEN_400
+        elif mode == "folder":
+            sync_badge.value = "📁 Sync: Dysk"
+            sync_badge.color = ft.Colors.BLUE_400
+        else:
+            sync_badge.value = "💾 Tryb lokalny"
+            sync_badge.color = ft.Colors.GREY_500
 
         if mob:
             root_layout.content = ft.Column([content_area, ft.Divider(height=1, color=ft.Colors.GREY_800), bottom_nav],
@@ -696,9 +800,16 @@ def main(page: ft.Page):
                     ft.Button("4", bgcolor=ft.Colors.AMBER_700 if max_a_limit == 4 else ft.Colors.GREY_800,
                               color=ft.Colors.WHITE, on_click=lambda e: (set_config("max_a_limit", 4), refresh_view())),
                 ]), ft.Divider(height=20),
-                ft.Text("Synchronizacja", weight=ft.FontWeight.BOLD),
+                ft.Text("☁️ Chmura (GitHub Gist - dla każdego bez serwera)", weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.CYAN_400),
+                gist_token_input,
+                gist_id_input,
+                ft.Button("Włącz Chmurę", bgcolor=ft.Colors.CYAN_800, color=ft.Colors.WHITE,
+                          on_click=lambda e: change_sync_mode("gist")),
+                ft.Divider(height=15),
+                ft.Text("Pozostałe opcje synchronizacji:", weight=ft.FontWeight.BOLD),
                 ha_url_input, ft.Button("Włącz HA", on_click=lambda e: change_sync_mode("ha_server")),
-                folder_input, ft.Button("Włącz Dysk", on_click=lambda e: change_sync_mode("folder")),
+                folder_input, ft.Button("Włącz Dysk (Tylko PC)", on_click=lambda e: change_sync_mode("folder")),
                 ft.Button("Tylko lokalnie", on_click=lambda e: change_sync_mode("none")),
             ]
             page.update()

@@ -1,6 +1,8 @@
+import base64
 import gc
+import json
 import os
-import shutil
+import urllib.request
 import pytest
 import flet as ft
 import main
@@ -191,18 +193,17 @@ def test_folder_sync_and_archive(setup_and_teardown):
 
 # --- 8. TEST PORÓWNYWANIA WERSJI ---
 def test_version_comparison():
-    assert main.is_newer_version("1.3.0", "1.2.1") is True
-    assert main.is_newer_version("1.3.0", "1.3.0") is False
-    assert main.is_newer_version("1.2.1", "1.3.0") is False
+    assert main.is_newer_version("1.4.0", "1.3.0") is True
+    assert main.is_newer_version("1.4.0", "1.4.0") is False
+    assert main.is_newer_version("1.3.0", "1.4.0") is False
     assert main.is_newer_version("2.0", "1.9.9") is True
 
 
-# --- 9. TEST INTERFEJSU PC I TELEFONU + WYWOŁANIE LAMBD (Drag & Drop, Kliknięcia) ---
+# --- 9. TEST INTERFEJSU PC I TELEFONU + WYWOŁANIE LAMBD ---
 def test_interactive_callbacks_and_drag_drop():
     main.add_task_db("Zadanie Testowe", is_daily=1, priority="B")
     task_id = main.get_tasks(is_daily_view=True)[0][0]
 
-    # 1. Test na szerokim ekranie (PC)
     page_pc = DummyPage(width=950)
     main.main(page_pc)
 
@@ -213,14 +214,12 @@ def test_interactive_callbacks_and_drag_drop():
     daily_pc_target = sidebar_col.controls[1]
     master_pc_target = sidebar_col.controls[2]
 
-    # Odpalamy wszystkie uśpione lambdy w DragTarget na PC (tu kryła się literówka!)
     dummy_ev = DummyEvent(src_id=str(task_id))
     for target in (daily_pc_target, master_pc_target):
         target.on_will_accept(dummy_ev)
         target.on_leave(dummy_ev)
         target.on_accept(dummy_ev)
 
-    # 2. Test na wąskim ekranie (Telefon)
     page_mob = DummyPage(width=400)
     main.main(page_mob)
 
@@ -232,16 +231,59 @@ def test_interactive_callbacks_and_drag_drop():
     master_mob_target = bottom_nav_row.controls[1]
     settings_mob_box = bottom_nav_row.controls[2]
 
-    # Odpalamy wszystkie uśpione lambdy w DragTarget na Telefonie
     for target in (daily_mob_target, master_mob_target):
         target.on_will_accept(dummy_ev)
         target.on_leave(dummy_ev)
         target.on_accept(dummy_ev)
 
-    # Przeklikanie wszystkich zakładek na telefonie
     master_mob_target.content.on_click(None)
     settings_mob_box.on_click(None)
     daily_mob_target.content.on_click(None)
+
+
+# --- 10. TEST CHMURY GITHUB GIST (Automatyczne tworzenie i pobieranie) ---
+def test_gist_cloud_sync(monkeypatch):
+    main.add_task_db("Zadanie Chmurowe", is_daily=1, priority="A")
+    main.set_config("sync_mode", "gist")
+    main.set_config("gist_token", "ghp_test_token_123")
+    main.set_config("gist_id", "")
+
+    cloud_storage = {}
+
+    class MockResponse:
+        def __init__(self, status, data_dict):
+            self.status = status
+            self._data = json.dumps(data_dict).encode("utf-8")
+
+        def read(self):
+            return self._data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    def mock_urlopen(req, timeout=5):
+        if req.method == "POST":
+            body = json.loads(req.data.decode("utf-8"))
+            cloud_storage["content"] = body["files"]["tasks.db.b64"]["content"]
+            return MockResponse(201, {"id": "nowe_id_chmury_999"})
+        elif req.method == "GET":
+            return MockResponse(200, {"files": {"tasks.db.b64": {"content": cloud_storage["content"]}}})
+        return MockResponse(200, {})
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    # 1. Wysyłamy bazę do chmury (powinno samo utworzyć Gist i zapisać ID)
+    ok_push, msg_push = main.push_database()
+    assert ok_push is True
+    assert main.get_config("gist_id") == "nowe_id_chmury_999"
+
+    # 2. Pobieramy bazę z chmury po ID i sprawdzamy integralność
+    ok_pull, msg_pull = main.pull_database()
+    assert ok_pull is True
+    assert "Chmury" in msg_pull
 
 
 if __name__ == "__main__":
