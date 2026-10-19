@@ -37,12 +37,13 @@ def get_installed_ota_version() -> str:
         try:
             with open(OTA_VERSION_FILE, "r", encoding="utf-8") as f:
                 return f.read().strip()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[OTA] Błąd odczytu pliku wersji OTA ({OTA_VERSION_FILE}): {e}")
     try:
         import app_logic
         return getattr(app_logic, "FALLBACK_VERSION", "0.0.0")
-    except Exception:
+    except Exception as e:
+        print(f"[OTA] Błąd pobierania wersji bazowej z app_logic: {e}")
         return "0.0.0"
 
 
@@ -51,13 +52,17 @@ def check_and_download_ota(force=False) -> tuple[bool, str]:
     ts = int(datetime.now().timestamp())
     headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"}
     try:
-        req_ver = urllib.request.Request(f"{GITHUB_RAW_BASE}/version.txt?t={ts}", headers=headers)
+        url_ver = f"{GITHUB_RAW_BASE}/version.txt?t={ts}"
+        req_ver = urllib.request.Request(url_ver, headers=headers)
         with urllib.request.urlopen(req_ver, timeout=4) as resp:
             remote_ver = resp.read().decode("utf-8").strip()
 
         local_ver = get_installed_ota_version()
+        print(f"[OTA] Sprawdzanie aktualizacji: zdalna v{remote_ver}, lokalna v{local_ver}")
         if force or is_newer_version(remote_ver, local_ver):
-            req_code = urllib.request.Request(f"{GITHUB_RAW_BASE}/app_logic.py?t={ts}", headers=headers)
+            print(f"[OTA] Wykryto nowszą wersję lub wymuszenie (v{remote_ver}). Pobieranie kodu...")
+            url_code = f"{GITHUB_RAW_BASE}/app_logic.py?t={ts}"
+            req_code = urllib.request.Request(url_code, headers=headers)
             with urllib.request.urlopen(req_code, timeout=6) as resp_code:
                 new_code = resp_code.read().decode("utf-8")
                 # Weryfikacja czy pobrany kod to poprawny Python (ochrona przed uciętym plikiem)
@@ -66,37 +71,43 @@ def check_and_download_ota(force=False) -> tuple[bool, str]:
                     f.write(new_code)
                 with open(OTA_VERSION_FILE, "w", encoding="utf-8") as f:
                     f.write(remote_ver)
+                print(f"[OTA] Pomyślnie pobrano i zapisano nową wersję v{remote_ver}.")
                 return True, remote_ver
-    except Exception:
-        pass
+        else:
+            print(f"[OTA] Aplikacja jest aktualna (v{local_ver}).")
+    except Exception as e:
+        print(f"[OTA] Błąd podczas sprawdzania lub pobierania aktualizacji: {e}")
+        traceback.print_exc()
     return False, get_installed_ota_version()
 
 
 def load_and_run(page: ft.Page):
-    # 1. Przy starcie na telefonie (gdy jesteśmy w spakowanym APK) sprawdzamy OTA
-    is_packaged_mobile = "FLET_APP_STORAGE_DATA" in os.environ
+    # 1. Sprawdzamy OTA przy starcie aplikacji (chyba że wyłączono flagą środowiskową DISABLE_OTA=1)
+    disable_ota = os.environ.get("DISABLE_OTA", "0") == "1"
     updated = False
     new_ver = ""
-    if is_packaged_mobile:
+    if not disable_ota:
         updated, new_ver = check_and_download_ota()
 
     try:
-        # 2. Jeśli mamy pobrany nowszy moduł w pamięci wewnętrznej -> ładujemy go!
-        if is_packaged_mobile and os.path.exists(OTA_LOGIC_FILE):
+        # 2. Jeśli mamy pobrany nowszy moduł w pamięci podręcznej OTA -> ładujemy go!
+        if os.path.exists(OTA_LOGIC_FILE):
+            print(f"[OTA] Ładowanie zaktualizowanego modułu z {OTA_LOGIC_FILE}")
             spec = importlib.util.spec_from_file_location("app_logic_ota", OTA_LOGIC_FILE)
             mod = importlib.util.module_from_spec(spec)
             sys.modules["app_logic"] = mod
             spec.loader.exec_module(mod)
             mod.main(page)
         else:
-            # 3. Na PC (w PyCharmie) lub przy pierwszym uruchomieniu ładujemy plik wbudowany
+            # 3. Wersja bazowa wbudowana w projekt
+            print("[OTA] Ładowanie wbudowanego modułu app_logic")
             import app_logic
             app_logic.main(page)
 
         if updated:
             page.overlay.append(
                 ft.SnackBar(
-                    ft.Text(f"🚀 Zaktualizowano w tle do wersji v{new_ver} (bez instalacji APK)!"),
+                    ft.Text(f"🚀 Zaktualizowano w tle do wersji v{new_ver}!"),
                     open=True,
                     bgcolor=ft.Colors.GREEN_800
                 )
@@ -106,6 +117,7 @@ def load_and_run(page: ft.Page):
     except Exception as e:
         # 4. ZABEZPIECZENIE: Jeśli pobrany plik ma błąd, nie blokujemy aplikacji!
         err_msg = traceback.format_exc()
+        print(f"[OTA Error] Błąd podczas uruchamiania modułu: {err_msg}")
         if os.path.exists(OTA_LOGIC_FILE):
             try:
                 os.remove(OTA_LOGIC_FILE)
