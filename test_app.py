@@ -300,7 +300,8 @@ def test_ui_edit_delete_dialogs():
     edit_btn.on_click(None)
     assert edit_task_dialog.open is True
 
-    edit_task_dialog.content.value = "Zadanie Przemianowane"
+    edit_field = edit_task_dialog.content.controls[0] if isinstance(edit_task_dialog.content, ft.Column) else edit_task_dialog.content
+    edit_field.value = "Zadanie Przemianowane"
     edit_task_dialog.actions[1].on_click(None)
     assert edit_task_dialog.open is False
     assert main.get_tasks(is_daily_view=True)[0][1] == "Zadanie Przemianowane"
@@ -463,6 +464,66 @@ def test_dark_slate_ui_and_quick_input():
     master_tasks = main.get_tasks(is_daily_view=False)
     assert len(master_tasks) >= 1
     assert master_tasks[0][1] == "Nowa szybka myśl"
+
+
+# --- 12. TEST EKSPORTU/IMPORTU JSON I LOKALNEGO SNAPSHOTU ---
+def test_json_export_import_and_snapshot(tmp_path):
+    main.add_task_db("Zadanie do JSON", is_daily=1, priority="A", category="💼 Praca")
+    main.add_routine_db("Rutyna JSON")
+
+    # 1. Eksport do słownika
+    data_dict = main.export_database_to_json_dict()
+    assert "tasks" in data_dict
+    assert len(data_dict["tasks"]) == 1
+    assert data_dict["tasks"][0]["title"] == "Zadanie do JSON"
+    assert data_dict["tasks"][0]["category"] == "💼 Praca"
+
+    # 2. Eksport do pliku
+    json_file = str(tmp_path / "test_backup.json")
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(data_dict, f, ensure_ascii=False)
+    assert os.path.exists(json_file)
+
+    # 3. Import ze słownika z czyszczeniem
+    data_dict["tasks"].append({
+        "title": "Importowane z JSON",
+        "is_daily": 0,
+        "is_done": 0,
+        "priority": "C",
+        "subtasks": [],
+        "category": "🎯 Osobiste"
+    })
+    ok_imp, msg_imp = main.import_database_from_json_dict(data_dict, replace_existing=True)
+    assert ok_imp is True
+    all_master = main.get_tasks(is_daily_view=False)
+    assert len(all_master) == 2
+    assert any(t[1] == "Importowane z JSON" and t[6] == "🎯 Osobiste" for t in all_master)
+
+    # 4. Snapshot bazy
+    ok_snap, snap_path = main.make_local_snapshot()
+    assert ok_snap is True
+    assert os.path.exists(snap_path)
+
+    ok_rest, msg_rest = main.restore_pre_sync_backup()
+    assert ok_rest is True
+
+
+# --- 13. TEST STREF PROJEKTOWYCH (KATEGORII) I DŹWIĘKÓW ---
+def test_task_categories_and_sound():
+    main.add_task_db("Projekt Domowy", is_daily=0, priority="B", category="🏠 Dom")
+    tasks = main.get_tasks(is_daily_view=False)
+    assert len(tasks) == 1
+    assert tasks[0][1] == "Projekt Domowy"
+    assert tasks[0][6] == "🏠 Dom"
+
+    # Zmiana kategorii
+    main.update_task_category_db(tasks[0][0], "💼 Praca")
+    updated = main.get_tasks(is_daily_view=False)
+    assert updated[0][6] == "💼 Praca"
+
+    # Dźwięki zwrotne nie mogą rzucać wyjątków
+    main.play_sound_feedback("task_done")
+    main.play_sound_feedback("timer_done")
 
 
 if __name__ == "__main__":

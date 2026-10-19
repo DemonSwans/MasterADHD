@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Improve mobile layout for task items and bump version to 1.6.7">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add focus timer and completed tasks archive; bump version to 1.6.8">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/test_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
@@ -53,23 +53,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0825024062106277" />
-      <entry key="MS500" value="2.0489944337299892" />
-      <entry key="S2" value="4.116806643862409" />
-      <entry key="S5" value="5.564781171935505" />
-      <entry key="S10" value="7.65035433219568" />
-      <entry key="S30" value="21.821408539899156" />
-      <entry key="S60" value="34.05441414669217" />
-      <entry key="M2" value="44.22016483110052" />
-      <entry key="M5" value="61.33642208805959" />
-      <entry key="M10" value="87.08827537834932" />
-      <entry key="M15" value="123.95364071510643" />
-      <entry key="M30" value="286.08300133396193" />
-      <entry key="H1" value="585.3591179451604" />
-      <entry key="H2" value="913.3421144509247" />
-      <entry key="H4" value="1167.1554192097087" />
-      <entry key="D1" value="1455.8950282569579" />
-      <entry key="W1" value="1518.0252373285716" />
+      <entry key="MS100" value="1.4244286864983837" />
+      <entry key="MS500" value="4.552259707982213" />
+      <entry key="S2" value="13.344776089817815" />
+      <entry key="S5" value="20.353972925822458" />
+      <entry key="S10" value="24.10294686510488" />
+      <entry key="S30" value="27.257421783965537" />
+      <entry key="S60" value="28.836449721442936" />
+      <entry key="M2" value="35.89716463519266" />
+      <entry key="M5" value="86.37975542843208" />
+      <entry key="M10" value="161.80934678335814" />
+      <entry key="M15" value="219.3370704944695" />
+      <entry key="M30" value="383.99236372087205" />
+      <entry key="H1" value="688.0272356794042" />
+      <entry key="H2" value="1055.8847708045014" />
+      <entry key="H4" value="1360.898851363752" />
+      <entry key="D1" value="1723.2699277007002" />
+      <entry key="W1" value="1802.0954244874745" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -91,23 +91,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.0390041569959174" />
-      <entry key="MS500" value="2.0339779473123207" />
-      <entry key="S2" value="4.10960329712856" />
-      <entry key="S5" value="5.5609095435591405" />
-      <entry key="S10" value="7.647656287054085" />
-      <entry key="S30" value="21.81873721873903" />
-      <entry key="S60" value="34.0523121132498" />
-      <entry key="M2" value="44.21879563215348" />
-      <entry key="M5" value="61.33566114360987" />
-      <entry key="M10" value="87.08773843507251" />
-      <entry key="M15" value="123.95314481568357" />
-      <entry key="M30" value="286.0824629985103" />
-      <entry key="H1" value="585.3585789727623" />
-      <entry key="H2" value="913.3416944852197" />
-      <entry key="H4" value="1167.15514974978" />
-      <entry key="D1" value="1455.8949699733141" />
-      <entry key="W1" value="1518.0252284248716" />
+      <entry key="MS100" value="1.3672402935548262" />
+      <entry key="MS500" value="4.5169266424135435" />
+      <entry key="S2" value="13.320159366840386" />
+      <entry key="S5" value="20.339111026903566" />
+      <entry key="S10" value="24.09417113119645" />
+      <entry key="S30" value="27.254119307875644" />
+      <entry key="S60" value="28.834708192723376" />
+      <entry key="M2" value="35.896093679600874" />
+      <entry key="M5" value="86.37874146968933" />
+      <entry key="M10" value="161.808396294573" />
+      <entry key="M15" value="219.3362120673523" />
+      <entry key="M30" value="383.9916260798292" />
+      <entry key="H1" value="688.0265885767355" />
+      <entry key="H2" value="1055.8842779306383" />
+      <entry key="H4" value="1360.8985336488804" />
+      <entry key="D1" value="1723.2698585548242" />
+      <entry key="W1" value="1802.0954139368405" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -160,7 +160,7 @@
       <workItem from="1792159635957" duration="6650000" />
       <workItem from="1792274222548" duration="1865000" />
       <workItem from="1792349402044" duration="16550000" />
-      <workItem from="1792442406902" duration="3838000" />
+      <workItem from="1792442406902" duration="5382000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -426,7 +426,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792445504994</updated>
     </task>
-    <option name="localTasksCounter" value="34" />
+    <task id="LOCAL-00034" summary="Add focus timer and completed tasks archive; bump version to 1.6.8">
+      <option name="closed" value="true" />
+      <created>1792446332518</created>
+      <option name="number" value="00034" />
+      <option name="presentableId" value="LOCAL-00034" />
+      <option name="project" value="LOCAL" />
+      <updated>1792446332518</updated>
+    </task>
+    <option name="localTasksCounter" value="35" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -444,7 +452,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Test" />
     <MESSAGE value="Enable manual workflow dispatch trigger in GitHub Actions" />
     <MESSAGE value="Add auto-update system, improve database sync handling, and enhance GitHub Actions for APK release." />
     <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and improve APK renaming process." />
@@ -469,7 +476,8 @@
     <MESSAGE value="Enhance OTA update mechanism with dynamic module reloading, fallback logic, and multi-location compatibility; add UI restart button; bump version to 1.6.4." />
     <MESSAGE value="Add editing and deletion support for tasks and subtasks; bump version to 1.6.6" />
     <MESSAGE value="Improve mobile layout for task items and bump version to 1.6.7" />
-    <option name="LAST_COMMIT_MESSAGE" value="Improve mobile layout for task items and bump version to 1.6.7" />
+    <MESSAGE value="Add focus timer and completed tasks archive; bump version to 1.6.8" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add focus timer and completed tasks archive; bump version to 1.6.8" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

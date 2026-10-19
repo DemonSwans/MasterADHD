@@ -14,7 +14,7 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.8"
+FALLBACK_VERSION = "1.6.9"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
@@ -117,6 +117,7 @@ def pull_database():
                         b64_content = files["tasks.db.b64"].get("content", "")
                         raw_db = base64.b64decode(b64_content.encode("utf-8"))
                         if is_valid_sqlite(raw_db):
+                            make_local_snapshot()
                             with open(LOCAL_DB, "wb") as f:
                                 f.write(raw_db)
                             return True, "Pobrano bazę z Chmury"
@@ -140,6 +141,7 @@ def pull_database():
                 if resp.status == 200:
                     data = resp.read()
                     if is_valid_sqlite(data):
+                        make_local_snapshot()
                         with open(LOCAL_DB, "wb") as f: f.write(data)
                         return True, "Pobrano bazę z serwera HA"
                     return False, "Odrzucono: Pobrany plik to nie baza"
@@ -160,6 +162,7 @@ def pull_database():
                 with open(remote_file, "rb") as f:
                     data = f.read()
                 if is_valid_sqlite(data):
+                    make_local_snapshot()
                     shutil.copy2(remote_file, LOCAL_DB)
                     return True, "Pobrano bazę z folderu"
                 return False, "Odrzucono: Plik uszkodzony"
@@ -183,10 +186,17 @@ def push_database():
         try:
             with open(LOCAL_DB, "rb") as f:
                 b64_str = base64.b64encode(f.read()).decode("utf-8")
+            
+            # Podwójny backup: baza SQLite oraz czytelny dla człowieka plik JSON w tym samym Giście!
+            json_backup_str = json.dumps(export_database_to_json_dict(), ensure_ascii=False, indent=2)
+
             payload = json.dumps({
-                "description": "MasterADHD Cloud Database Sync",
+                "description": "MasterADHD Cloud Database Sync & Human-Readable JSON Backup",
                 "public": False,
-                "files": {"tasks.db.b64": {"content": b64_str}}
+                "files": {
+                    "tasks.db.b64": {"content": b64_str},
+                    "backup_tasks.json": {"content": json_backup_str}
+                }
             }).encode("utf-8")
 
             url = f"https://api.github.com/gists/{gist_id}" if gist_id else "https://api.github.com/gists"
@@ -294,6 +304,10 @@ def init_db():
             conn.execute("ALTER TABLE tasks ADD COLUMN subtasks TEXT DEFAULT '[]'")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE tasks ADD COLUMN category TEXT DEFAULT 'Ogólne'")
+        except sqlite3.OperationalError:
+            pass
         conn.execute(
             "CREATE TABLE IF NOT EXISTS routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, is_done INTEGER DEFAULT 0)")
         conn.execute("""
@@ -307,15 +321,131 @@ def init_db():
                      """)
 
 
+def make_local_snapshot():
+    """Tworzy lokalną kopię zapasową bazy tuż przed jakąkolwiek operacją synchronizacji."""
+    if os.path.exists(LOCAL_DB):
+        try:
+            snapshot_path = os.path.join(APP_DIR, "tasks_pre_sync_backup.db")
+            shutil.copy2(LOCAL_DB, snapshot_path)
+            return True, snapshot_path
+        except Exception as e:
+            return False, str(e)
+    return False, "Brak bazy lokalnej"
+
+
+def restore_pre_sync_backup():
+    """Przywraca lokalną bazę ze snapshotu wykonanego przed ostatnią synchronizacją."""
+    snapshot_path = os.path.join(APP_DIR, "tasks_pre_sync_backup.db")
+    if os.path.exists(snapshot_path):
+        try:
+            shutil.copy2(snapshot_path, LOCAL_DB)
+            return True, "Pomyślnie przywrócono kopię sprzed synchronizacji"
+        except Exception as e:
+            return False, f"Błąd przywracania: {e}"
+    return False, "Brak zapisanego snapshotu bezpieczeństwa"
+
+
+def export_database_to_json_dict():
+    """Eksportuje całą zawartość bazy (zadania, rutyny, archiwum) do słownika JSON."""
+    with sqlite3.connect(LOCAL_DB) as conn:
+        tasks_rows = conn.execute("SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks").fetchall()
+        tasks = []
+        for r in tasks_rows:
+            tasks.append({
+                "id": r[0],
+                "title": r[1],
+                "is_daily": r[2],
+                "is_done": r[3],
+                "priority": r[4],
+                "subtasks": json.loads(r[5] if r[5] else "[]"),
+                "category": r[6] if len(r) > 6 and r[6] else "Ogólne"
+            })
+        routines_rows = conn.execute("SELECT id, title, is_done FROM routines").fetchall()
+        routines = [{"id": r[0], "title": r[1], "is_done": r[2]} for r in routines_rows]
+        archive_rows = conn.execute("SELECT id, title, priority, completed_at FROM completed_archive").fetchall()
+        archive = [{"id": r[0], "title": r[1], "priority": r[2], "completed_at": r[3]} for r in archive_rows]
+        return {
+            "version": get_local_version(),
+            "exported_at": datetime.now().isoformat(),
+            "tasks": tasks,
+            "routines": routines,
+            "completed_archive": archive
+        }
+
+
+def export_database_to_json_file():
+    """Zapisuje czytelny plik JSON z pełną kopią bazy w folderze danych."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    target_path = os.path.join(APP_DIR, f"master_adhd_backup_{ts}.json")
+    try:
+        data = export_database_to_json_dict()
+        with open(target_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True, target_path
+    except Exception as e:
+        return False, str(e)
+
+
+def import_database_from_json_dict(data, replace_existing=False):
+    """Importuje zadania, rutyny i archiwum ze słownika JSON do SQLite."""
+    with sqlite3.connect(LOCAL_DB) as conn:
+        if replace_existing:
+            conn.execute("DELETE FROM tasks")
+            conn.execute("DELETE FROM routines")
+            conn.execute("DELETE FROM completed_archive")
+
+        for t in data.get("tasks", []):
+            conn.execute(
+                "INSERT INTO tasks (title, is_daily, is_done, priority, subtasks, category) VALUES (?, ?, ?, ?, ?, ?)",
+                (t.get("title", ""), int(t.get("is_daily", 0)), int(t.get("is_done", 0)),
+                 t.get("priority", "B"), json.dumps(t.get("subtasks", [])), t.get("category", "Ogólne"))
+            )
+        for r in data.get("routines", []):
+            conn.execute(
+                "INSERT INTO routines (title, is_done) VALUES (?, ?)",
+                (r.get("title", ""), int(r.get("is_done", 0)))
+            )
+        for a in data.get("completed_archive", []):
+            conn.execute(
+                "INSERT INTO completed_archive (title, priority, completed_at) VALUES (?, ?, ?)",
+                (a.get("title", ""), a.get("priority", "B"), a.get("completed_at", ""))
+            )
+    push_database_async()
+    return True, "Pomyślnie zaimportowano dane z JSON"
+
+
+def play_sound_feedback(sound_type="task_done"):
+    """Odtwarza satysfakcjonujący dźwięk sukcesu lub powiadomienia w osobnym wątku."""
+    sound_enabled = get_config("sound_enabled", "1") == "1"
+    if not sound_enabled:
+        return
+
+    def _play():
+        try:
+            if sys.platform == "win32":
+                import winsound
+                if sound_type == "timer_done":
+                    winsound.Beep(523, 120)
+                    winsound.Beep(659, 120)
+                    winsound.Beep(784, 250)
+                else:
+                    winsound.Beep(659, 80)
+                    winsound.Beep(880, 120)
+        except Exception:
+            pass
+
+    threading.Thread(target=_play, daemon=True).start()
+
+
 def get_tasks(is_daily_view=True):
     with sqlite3.connect(LOCAL_DB) as conn:
         if is_daily_view:
             rows = conn.execute(
-                "SELECT id, title, is_daily, is_done, priority, subtasks FROM tasks WHERE is_daily = 1 ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
+                "SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks WHERE is_daily = 1 ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, title, is_daily, is_done, priority, subtasks FROM tasks ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
-        return [(r[0], r[1], r[2], r[3], r[4], json.loads(r[5] if r[5] else '[]')) for r in rows]
+                "SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
+        return [(r[0], r[1], r[2], r[3], r[4], json.loads(r[5] if r[5] else '[]'), r[6] if len(r) > 6 and r[6] else "Ogólne") for r in rows]
 
 
 def get_routines():
@@ -358,9 +488,16 @@ def count_daily_priority_a():
         return res[0] if res else 0
 
 
-def add_task_db(title, is_daily, priority="B"):
+def add_task_db(title, is_daily, priority="B", category="Ogólne"):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute(
-        "INSERT INTO tasks (title, is_daily, priority) VALUES (?, ?, ?)", (title, int(is_daily), priority))
+        "INSERT INTO tasks (title, is_daily, priority, subtasks, category) VALUES (?, ?, ?, '[]', ?)",
+        (title.strip(), int(is_daily), priority, category))
+    push_database_async()
+
+
+def update_task_category_db(task_id, category):
+    with sqlite3.connect(LOCAL_DB) as conn:
+        conn.execute("UPDATE tasks SET category = ? WHERE id = ?", (category, task_id))
     push_database_async()
 
 
@@ -388,9 +525,12 @@ def delete_task_db(task_id):
     push_database_async()
 
 
-def edit_task_title_db(task_id, new_title):
+def edit_task_title_db(task_id, new_title, new_category=None):
     with sqlite3.connect(LOCAL_DB) as conn:
-        conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (new_title.strip(), task_id))
+        if new_category:
+            conn.execute("UPDATE tasks SET title = ?, category = ? WHERE id = ?", (new_title.strip(), new_category, task_id))
+        else:
+            conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (new_title.strip(), task_id))
     push_database_async()
 
 
@@ -573,6 +713,7 @@ def main(page: ft.Page):
                 with timer_lock:
                     timer_running = False
                     timer_message = "🎉 Brawo! Czas minął – paraliż pokonany!"
+                play_sound_feedback("timer_done")
                 update_timer_ui()
                 break
 
@@ -604,6 +745,33 @@ def main(page: ft.Page):
             timer_seconds_left = seconds
             timer_message = ""
         update_timer_ui()
+        refresh_view()
+
+    # --- STREFY PROJEKTÓW I FILTRY MASTER LISTY ---
+    ZONES = ["Ogólne", "💼 Praca", "🏠 Dom", "🎯 Osobiste"]
+    master_search_query = ""
+    master_filter_priority = "ALL"
+    master_filter_status = "ALL"
+    master_filter_category = "ALL"
+
+    def set_search_query(q):
+        nonlocal master_search_query
+        master_search_query = q
+        refresh_view()
+
+    def set_filter_category(cat):
+        nonlocal master_filter_category
+        master_filter_category = cat
+        refresh_view()
+
+    def set_filter_priority(prio):
+        nonlocal master_filter_priority
+        master_filter_priority = prio
+        refresh_view()
+
+    def set_filter_status(stat):
+        nonlocal master_filter_status
+        master_filter_status = stat
         refresh_view()
 
     gist_token_input = ft.TextField(label="Token GitHub (uprawnienie 'gist')", value=get_config("gist_token", ""),
@@ -773,16 +941,29 @@ def main(page: ft.Page):
                 border=ft.Border.all(2, ft.Colors.WHITE) if is_sel else None,
                 on_click=lambda e, pr=p: select_modal_prio(pr)))
 
+    master_category_dropdown = ft.Dropdown(
+        label="Strefa / Kategoria",
+        options=[ft.dropdown.Option(z) for z in ZONES],
+        value="Ogólne",
+        bgcolor=COLOR_BG_SURFACE,
+        border_color=COLOR_BG_BORDER
+    )
+
     def save_master_task(e=None):
         if master_title_field.value.strip():
-            add_task_db(master_title_field.value.strip(), is_daily=False, priority=selected_new_prio)
+            add_task_db(
+                master_title_field.value.strip(),
+                is_daily=False,
+                priority=selected_new_prio,
+                category=master_category_dropdown.value or "Ogólne"
+            )
             master_title_field.value = ""
             master_dialog.open = False
             status_text.value = "✓ Dodano"
             refresh_view()
 
     master_dialog = ft.AlertDialog(title=ft.Text("➕ Nowy projekt / zadanie"), content=ft.Column(
-        [master_title_field, ft.Text("Priorytet:", size=13), prio_select_row], tight=True),
+        [master_title_field, master_category_dropdown, ft.Text("Priorytet:", size=13), prio_select_row], tight=True, spacing=10),
                                    actions=[ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
                                             ft.Button("Dodaj", on_click=save_master_task)])
 
@@ -817,20 +998,29 @@ def main(page: ft.Page):
         focused_border_color=COLOR_PRIO_B,
         on_submit=lambda e: save_task_edit()
     )
+    edit_category_dropdown = ft.Dropdown(
+        label="Strefa / Kategoria",
+        options=[ft.dropdown.Option(z) for z in ZONES],
+        value="Ogólne",
+        bgcolor=COLOR_BG_SURFACE,
+        border_color=COLOR_BG_BORDER
+    )
     editing_task_id = None
 
-    def open_edit_task_dialog(task_id, current_title):
+    def open_edit_task_dialog(task_id, current_title, current_category="Ogólne"):
         nonlocal editing_task_id
         editing_task_id = task_id
         edit_task_field.value = current_title
+        edit_category_dropdown.value = current_category or "Ogólne"
         edit_task_dialog.open = True
         page.update()
 
     def save_task_edit(e=None):
         nonlocal editing_task_id
         val = edit_task_field.value.strip()
+        cat = edit_category_dropdown.value or "Ogólne"
         if editing_task_id and val:
-            edit_task_title_db(editing_task_id, val)
+            edit_task_title_db(editing_task_id, val, new_category=cat)
             edit_task_dialog.open = False
             status_text.value = "✓ Zaktualizowano zadanie"
             warning_text.value = ""
@@ -838,7 +1028,7 @@ def main(page: ft.Page):
 
     edit_task_dialog = ft.AlertDialog(
         title=ft.Text("✏️ Edytuj zadanie"),
-        content=edit_task_field,
+        content=ft.Column([edit_task_field, edit_category_dropdown], tight=True, spacing=10),
         actions=[
             ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
             ft.Button("Zapisz", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=save_task_edit)
@@ -1136,6 +1326,8 @@ def main(page: ft.Page):
         refresh_view()
 
     def handle_task_check(task_id, is_checked, subtask_idx, subtasks):
+        if is_checked:
+            play_sound_feedback("task_done")
         if subtask_idx is not None:
             subtasks[subtask_idx]["is_done"] = 1 if is_checked else 0
             update_subtasks_db(task_id, subtasks)
@@ -1297,10 +1489,65 @@ def main(page: ft.Page):
                 ], spacing=10)
             )
 
+            def toggle_sound(e):
+                set_config("sound_enabled", "1" if e.control.value else "0")
+                refresh_view()
+
+            card_sound = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.VOLUME_UP_ROUNDED, size=18, color=COLOR_PRIO_B),
+                        ft.Text("Dźwięki i Powiadomienia", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
+                    ], spacing=8),
+                    ft.Switch(
+                        label="Dźwięki sukcesu i minutnika (Audio Chime)",
+                        value=get_config("sound_enabled", "1") == "1",
+                        active_color=COLOR_SUCCESS,
+                        on_change=toggle_sound
+                    )
+                ], spacing=8)
+            )
+
+            def handle_export_json(e):
+                ok, path = export_database_to_json_file()
+                if ok:
+                    status_text.value = "✓ Zapisano czytelny plik kopii zapasowej JSON!"
+                    warning_text.value = f"Lokalizacja: {path}"
+                else:
+                    warning_text.value = f"Błąd eksportu: {path}"
+                refresh_view()
+
+            def handle_restore_snapshot(e):
+                ok, msg = restore_pre_sync_backup()
+                if ok:
+                    status_text.value = f"✓ {msg}"
+                    warning_text.value = ""
+                else:
+                    warning_text.value = f"⚠️ {msg}"
+                refresh_view()
+
+            card_backup = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.SECURITY_ROUNDED, size=18, color=COLOR_PRIO_B),
+                        ft.Text("Kopia Zapasowa i Bezpieczeństwo", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
+                    ], spacing=8),
+                    ft.Text("Każda synchronizacja z chmurą Gist automatycznie zapisuje bazę SQLite oraz czytelny plik backup_tasks.json. Dodatkowo przed każdym pobraniem tworzony jest lokalny snapshot.", size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Row([
+                        ft.Button("📥 Eksportuj bazę do pliku JSON", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=handle_export_json),
+                        ft.Button("🛡️ Przywróć snapshot sprzed synchronizacji", bgcolor=COLOR_BG_SURFACE, color=COLOR_PRIO_B, on_click=handle_restore_snapshot)
+                    ], wrap=True, spacing=10)
+                ], spacing=10)
+            )
+
             content_column.controls = [
                 ft.Row([title_text, ft.Container(expand=True), sync_badge if mob else ft.Container()]),
                 status_text, warning_text,
                 card_ota,
+                card_sound,
+                card_backup,
                 card_routines,
                 card_limits,
                 card_gist,
@@ -1437,7 +1684,7 @@ def main(page: ft.Page):
                     )
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
             )
-        else:
+        if not is_daily_mode:
             inline_input_field.hint_text = "➕ Nowe zadanie do Master listy (Enter)..."
             quick_bar = ft.Container(
                 bgcolor=COLOR_BG_CARD,
@@ -1455,7 +1702,35 @@ def main(page: ft.Page):
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
             )
 
-        for task_id, title, is_daily, is_done, priority, subtasks in all_view_tasks:
+            filtered_tasks = []
+            for t in all_view_tasks:
+                tid, tit, dly, dn, prio, subs, *extra = t
+                cat = extra[0] if extra else "Ogólne"
+
+                if master_search_query:
+                    q = master_search_query.lower()
+                    m_title = q in tit.lower()
+                    m_sub = any(q in st.get("title", "").lower() for st in subs)
+                    if not (m_title or m_sub):
+                        continue
+
+                if master_filter_priority != "ALL" and prio != master_filter_priority:
+                    continue
+
+                if master_filter_status == "ACTIVE" and dn == 1:
+                    continue
+                if master_filter_status == "DONE" and dn == 0:
+                    continue
+
+                if master_filter_category != "ALL" and cat != master_filter_category:
+                    continue
+
+                filtered_tasks.append(t)
+            all_view_tasks = filtered_tasks
+
+        for t in all_view_tasks:
+            task_id, title, is_daily, is_done, priority, subtasks, *extra = t
+            category = extra[0] if extra else "Ogólne"
             prio = priority if priority in ("A", "B", "C") else "B"
             card_border_color = COLOR_BG_BORDER if not is_done else "#21262d"
 
@@ -1735,7 +2010,7 @@ def main(page: ft.Page):
                     tooltip="Edytuj zadanie",
                     width=28,
                     height=28,
-                    on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
+                    on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(tid, tit, current_category=cat)
                 )
                 del_btn = ft.IconButton(
                     icon=ft.Icons.DELETE_OUTLINE,
@@ -1774,6 +2049,15 @@ def main(page: ft.Page):
                     border_radius=6,
                     tooltip="Zadanie jest na liście Daily"
                 )
+
+                category_badge = ft.Container(
+                    content=ft.Text(category, size=10, color=COLOR_PRIO_C, weight=ft.FontWeight.BOLD),
+                    bgcolor="#3b82f622",
+                    border=ft.Border.all(1, "#3b82f644"),
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                    border_radius=6,
+                    tooltip=f"Strefa: {category}"
+                ) if category != "Ogólne" else None
 
                 add_krok_btn = ft.IconButton(
                     icon=ft.Icons.ADD_TASK,
@@ -1852,6 +2136,8 @@ def main(page: ft.Page):
                     ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
 
                     action_items = []
+                    if category_badge:
+                        action_items.append(category_badge)
                     if is_daily:
                         action_items.append(daily_badge)
                     action_items.append(ft.Container(expand=True))
@@ -1872,6 +2158,8 @@ def main(page: ft.Page):
                         chk,
                         title_text_ctrl
                     ]
+                    if category_badge:
+                        title_row_controls.append(category_badge)
                     if is_daily:
                         title_row_controls.append(daily_badge)
                     title_row_controls.append(add_krok_btn)
@@ -1906,6 +2194,83 @@ def main(page: ft.Page):
             ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             quick_bar
         ]
+
+        if not is_daily_mode:
+            search_input = ft.TextField(
+                hint_text="🔍 Szukaj w zadaniach i krokach...",
+                value=master_search_query,
+                expand=True,
+                dense=True,
+                content_padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                bgcolor=COLOR_BG_CARD,
+                border_color=COLOR_BG_BORDER,
+                on_change=lambda e: set_search_query(e.control.value)
+            )
+
+            zone_pills = []
+            for z_val, z_lbl in [("ALL", "Wszystkie")] + [(z, z) for z in ZONES]:
+                is_active = (master_filter_category == z_val)
+                zone_pills.append(
+                    ft.Container(
+                        content=ft.Text(z_lbl, size=11, weight=ft.FontWeight.BOLD,
+                                        color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+                        bgcolor="#3b82f633" if is_active else "#21262d",
+                        border=ft.Border.all(1, COLOR_PRIO_C if is_active else COLOR_BG_BORDER),
+                        border_radius=8,
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=5),
+                        on_click=lambda e, zv=z_val: set_filter_category(zv)
+                    )
+                )
+
+            prio_pills = []
+            for p_val, p_lbl in [("ALL", "Wsz"), ("A", "A"), ("B", "B"), ("C", "C")]:
+                is_active = (master_filter_priority == p_val)
+                prio_bg = priority_colors.get(p_val, "#21262d") if is_active else "#21262d"
+                prio_pills.append(
+                    ft.Container(
+                        content=ft.Text(p_lbl, size=11, weight=ft.FontWeight.BOLD,
+                                        color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+                        bgcolor=prio_bg if p_val != "ALL" else ("#f59e0b33" if is_active else "#21262d"),
+                        border=ft.Border.all(1, COLOR_PRIO_B if is_active else COLOR_BG_BORDER),
+                        border_radius=8,
+                        padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                        on_click=lambda e, pv=p_val: set_filter_priority(pv)
+                    )
+                )
+
+            status_pills = []
+            for s_val, s_lbl in [("ALL", "Wsz"), ("ACTIVE", "Do zrobienia"), ("DONE", "Zrobione")]:
+                is_active = (master_filter_status == s_val)
+                status_pills.append(
+                    ft.Container(
+                        content=ft.Text(s_lbl, size=11, weight=ft.FontWeight.BOLD,
+                                        color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+                        bgcolor="#10b98133" if is_active else "#21262d",
+                        border=ft.Border.all(1, COLOR_SUCCESS if is_active else COLOR_BG_BORDER),
+                        border_radius=8,
+                        padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                        on_click=lambda e, sv=s_val: set_filter_status(sv)
+                    )
+                )
+
+            filter_bar = ft.Container(
+                bgcolor=COLOR_BG_CARD,
+                border=ft.Border.all(1, COLOR_BG_BORDER),
+                border_radius=12,
+                padding=ft.Padding.all(10),
+                content=ft.Column([
+                    ft.Row([search_input], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row(zone_pills, scroll=ft.ScrollMode.AUTO, spacing=6),
+                    ft.Row([
+                        ft.Text("Priorytet:", size=11, color=COLOR_TEXT_SECONDARY),
+                        ft.Row(prio_pills, spacing=4),
+                        ft.Container(width=8),
+                        ft.Text("Status:", size=11, color=COLOR_TEXT_SECONDARY),
+                        ft.Row(status_pills, spacing=4)
+                    ], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+                ], spacing=8)
+            )
+            elements.append(filter_bar)
         if is_daily_mode:
             preset_5 = ft.Container(
                 content=ft.Text("5 min", size=11, weight=ft.FontWeight.BOLD,
