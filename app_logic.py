@@ -14,7 +14,7 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.6"
+FALLBACK_VERSION = "1.6.7"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
@@ -1304,188 +1304,7 @@ def main(page: ft.Page):
                         bgcolor="#3b82f622", padding=ft.Padding.symmetric(horizontal=6, vertical=2), border_radius=6
                     )
 
-                    row_controls = [
-                        ft.Column(prio_items, spacing=3, tight=True),
-                        ft.Column([
-                            ft.Row([
-                                ft.Text(title, size=12, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500),
-                                step_badge
-                            ], spacing=6, tight=True),
-                            ft.Row([
-                                ft.Checkbox(
-                                    label=current_st["title"],
-                                    value=step_done,
-                                    active_color=COLOR_SUCCESS,
-                                    expand=True,
-                                    label_style=ft.TextStyle(
-                                        size=14,
-                                        weight=ft.FontWeight.W_500,
-                                        color=COLOR_TEXT_SECONDARY if step_done else COLOR_TEXT_PRIMARY,
-                                        decoration=ft.TextDecoration.LINE_THROUGH if step_done else None
-                                    ),
-                                    on_change=lambda e, tid=task_id, s_idx=idx, s_list=subtasks: handle_task_check(
-                                        tid, e.control.value, s_idx, s_list
-                                    )
-                                ),
-                                ft.IconButton(
-                                    icon=ft.Icons.EDIT_NOTE,
-                                    icon_size=16,
-                                    icon_color=COLOR_TEXT_SECONDARY,
-                                    tooltip="Edytuj ten krok",
-                                    width=26,
-                                    height=26,
-                                    on_click=lambda e, tid=task_id, i=idx, subs=subtasks: open_edit_subtask_dialog(tid, i, subs)
-                                )
-                            ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
-                        ], spacing=1, expand=True)
-                    ]
-
-                    if current_st["is_done"] == 1 and idx < len(subtasks) - 1:
-                        row_controls.append(
-                            ft.IconButton(
-                                icon=ft.Icons.ARROW_FORWARD,
-                                icon_color=COLOR_SUCCESS,
-                                tooltip="Kolejny krok",
-                                on_click=lambda e, tid=task_id: next_subtask(tid)
-                            )
-                        )
-
-                    row_controls.append(
-                        ft.IconButton(
-                            icon=ft.Icons.EDIT_OUTLINED,
-                            icon_size=16,
-                            icon_color=COLOR_TEXT_SECONDARY,
-                            tooltip="Edytuj zadanie",
-                            width=28,
-                            height=28,
-                            on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
-                        )
-                    )
-                    row_controls.append(
-                        ft.IconButton(
-                            icon=ft.Icons.DELETE_OUTLINE,
-                            icon_size=16,
-                            icon_color=COLOR_PRIO_A,
-                            tooltip="Usuń zadanie",
-                            width=28,
-                            height=28,
-                            on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
-                        )
-                    )
-                    row_controls.append(drag_handle)
-
-                    task_content = ft.Container(
-                        bgcolor=COLOR_BG_CARD,
-                        border=ft.Border.all(1, card_border_color),
-                        border_radius=12,
-                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
-                        content=ft.Row(controls=row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
-                    )
-                else:
-                    task_done = bool(is_done)
-                    task_content = ft.Container(
-                        bgcolor=COLOR_BG_CARD,
-                        border=ft.Border.all(1, card_border_color),
-                        border_radius=12,
-                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
-                        content=ft.Row(
-                            controls=[
-                                ft.Column(prio_items, spacing=3, tight=True),
-                                ft.Checkbox(
-                                    label=title,
-                                    value=task_done,
-                                    active_color=COLOR_SUCCESS,
-                                    expand=True,
-                                    label_style=ft.TextStyle(
-                                        size=14,
-                                        weight=ft.FontWeight.W_500,
-                                        color=COLOR_TEXT_SECONDARY if task_done else COLOR_TEXT_PRIMARY,
-                                        decoration=ft.TextDecoration.LINE_THROUGH if task_done else None
-                                    ),
-                                    on_change=lambda e, tid=task_id: handle_task_check(
-                                        tid, e.control.value, None, subtasks
-                                    )
-                                ),
-                                ft.IconButton(
-                                    icon=ft.Icons.EDIT_OUTLINED,
-                                    icon_size=16,
-                                    icon_color=COLOR_TEXT_SECONDARY,
-                                    tooltip="Edytuj zadanie",
-                                    width=28,
-                                    height=28,
-                                    on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
-                                ),
-                                ft.IconButton(
-                                    icon=ft.Icons.DELETE_OUTLINE,
-                                    icon_size=16,
-                                    icon_color=COLOR_PRIO_A,
-                                    tooltip="Usuń zadanie",
-                                    width=28,
-                                    height=28,
-                                    on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
-                                ),
-                                drag_handle
-                            ],
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=10
-                        )
-                    )
-            else:
-                task_done = bool(is_done)
-                title_row_controls = [
-                    ft.Column(prio_items, spacing=3, tight=True),
-                    ft.Checkbox(
-                        label=title,
-                        value=task_done,
-                        active_color=COLOR_SUCCESS,
-                        expand=True,
-                        label_style=ft.TextStyle(
-                            size=14,
-                            weight=ft.FontWeight.W_500,
-                            color=COLOR_TEXT_SECONDARY if task_done else COLOR_TEXT_PRIMARY,
-                            decoration=ft.TextDecoration.LINE_THROUGH if task_done else None
-                        ),
-                        on_change=lambda e, tid=task_id: handle_task_check(
-                            tid, e.control.value, None, subtasks
-                        )
-                    ),
-                ]
-
-                if is_daily:
-                    title_row_controls.append(
-                        ft.Container(
-                            content=ft.Row([
-                                ft.Icon(ft.Icons.WB_SUNNY, size=13, color=COLOR_PRIO_B),
-                                ft.Text("Daily", size=11, color=COLOR_PRIO_B, weight=ft.FontWeight.BOLD)
-                            ], spacing=4, tight=True),
-                            bgcolor="#f59e0b22",
-                            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
-                            border_radius=6,
-                            tooltip="Zadanie jest na liście Daily"
-                        )
-                    )
-
-                if mob:
-                    title_row_controls.append(
-                        ft.IconButton(
-                            icon=ft.Icons.ADD_TASK,
-                            icon_size=18,
-                            icon_color=COLOR_PRIO_C,
-                            tooltip="Dodaj krok do planu",
-                            on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
-                        )
-                    )
-                else:
-                    title_row_controls.append(
-                        ft.TextButton(
-                            "👣 Krok",
-                            icon=ft.Icons.ADD,
-                            style=ft.ButtonStyle(color=COLOR_PRIO_C),
-                            on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
-                        )
-                    )
-                title_row_controls.append(
-                    ft.IconButton(
+                    edit_btn = ft.IconButton(
                         icon=ft.Icons.EDIT_OUTLINED,
                         icon_size=16,
                         icon_color=COLOR_TEXT_SECONDARY,
@@ -1494,9 +1313,7 @@ def main(page: ft.Page):
                         height=28,
                         on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
                     )
-                )
-                title_row_controls.append(
-                    ft.IconButton(
+                    del_btn = ft.IconButton(
                         icon=ft.Icons.DELETE_OUTLINE,
                         icon_size=16,
                         icon_color=COLOR_PRIO_A,
@@ -1505,29 +1322,279 @@ def main(page: ft.Page):
                         height=28,
                         on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
                     )
+
+                    step_checkbox = ft.Checkbox(
+                        value=step_done,
+                        active_color=COLOR_SUCCESS,
+                        on_change=lambda e, tid=task_id, s_idx=idx, s_list=subtasks: handle_task_check(
+                            tid, e.control.value, s_idx, s_list
+                        )
+                    )
+                    step_title_ctrl = ft.Container(
+                        content=ft.Text(
+                            current_st["title"],
+                            size=14,
+                            weight=ft.FontWeight.W_500,
+                            color=COLOR_TEXT_SECONDARY if step_done else COLOR_TEXT_PRIMARY,
+                            style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if step_done else None),
+                            no_wrap=False
+                        ),
+                        expand=True,
+                        on_click=lambda e, tid=task_id, s_idx=idx, s_list=subtasks, sd=step_done: handle_task_check(
+                            tid, not sd, s_idx, s_list
+                        )
+                    )
+                    edit_step_btn = ft.IconButton(
+                        icon=ft.Icons.EDIT_NOTE,
+                        icon_size=16,
+                        icon_color=COLOR_TEXT_SECONDARY,
+                        tooltip="Edytuj ten krok",
+                        width=26,
+                        height=26,
+                        on_click=lambda e, tid=task_id, i=idx, subs=subtasks: open_edit_subtask_dialog(tid, i, subs)
+                    )
+
+                    if mob:
+                        top_row = ft.Row([
+                            ft.Column(prio_items, spacing=3, tight=True),
+                            ft.Column([
+                                ft.Row([
+                                    ft.Text(title, size=12, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500),
+                                    step_badge
+                                ], spacing=6, tight=True),
+                                ft.Row([
+                                    step_checkbox,
+                                    step_title_ctrl,
+                                    edit_step_btn
+                                ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+                            ], spacing=1, expand=True),
+                            drag_handle
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
+
+                        action_items = []
+                        if current_st["is_done"] == 1 and idx < len(subtasks) - 1:
+                            action_items.append(
+                                ft.TextButton(
+                                    "Następny krok",
+                                    icon=ft.Icons.ARROW_FORWARD,
+                                    style=ft.ButtonStyle(color=COLOR_SUCCESS),
+                                    on_click=lambda e, tid=task_id: next_subtask(tid)
+                                )
+                            )
+                        action_items.append(ft.Container(expand=True))
+                        action_items.extend([edit_btn, del_btn])
+                        action_row = ft.Row(action_items, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+
+                        task_content = ft.Container(
+                            bgcolor=COLOR_BG_CARD,
+                            border=ft.Border.all(1, card_border_color),
+                            border_radius=12,
+                            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                            content=ft.Column([top_row, action_row], spacing=4)
+                        )
+                    else:
+                        row_controls = [
+                            ft.Column(prio_items, spacing=3, tight=True),
+                            ft.Column([
+                                ft.Row([
+                                    ft.Text(title, size=12, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500),
+                                    step_badge
+                                ], spacing=6, tight=True),
+                                ft.Row([
+                                    step_checkbox,
+                                    step_title_ctrl,
+                                    edit_step_btn
+                                ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+                            ], spacing=1, expand=True)
+                        ]
+                        if current_st["is_done"] == 1 and idx < len(subtasks) - 1:
+                            row_controls.append(
+                                ft.IconButton(
+                                    icon=ft.Icons.ARROW_FORWARD,
+                                    icon_color=COLOR_SUCCESS,
+                                    tooltip="Kolejny krok",
+                                    on_click=lambda e, tid=task_id: next_subtask(tid)
+                                )
+                            )
+                        row_controls.append(edit_btn)
+                        row_controls.append(del_btn)
+                        row_controls.append(drag_handle)
+
+                        task_content = ft.Container(
+                            bgcolor=COLOR_BG_CARD,
+                            border=ft.Border.all(1, card_border_color),
+                            border_radius=12,
+                            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                            content=ft.Row(controls=row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
+                        )
+                else:
+                    task_done = bool(is_done)
+                    edit_btn = ft.IconButton(
+                        icon=ft.Icons.EDIT_OUTLINED,
+                        icon_size=16,
+                        icon_color=COLOR_TEXT_SECONDARY,
+                        tooltip="Edytuj zadanie",
+                        width=28,
+                        height=28,
+                        on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
+                    )
+                    del_btn = ft.IconButton(
+                        icon=ft.Icons.DELETE_OUTLINE,
+                        icon_size=16,
+                        icon_color=COLOR_PRIO_A,
+                        tooltip="Usuń zadanie",
+                        width=28,
+                        height=28,
+                        on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
+                    )
+                    chk = ft.Checkbox(
+                        value=task_done,
+                        active_color=COLOR_SUCCESS,
+                        on_change=lambda e, tid=task_id: handle_task_check(tid, e.control.value, None, subtasks)
+                    )
+                    title_text_ctrl = ft.Container(
+                        content=ft.Text(
+                            title,
+                            size=14,
+                            weight=ft.FontWeight.W_500,
+                            color=COLOR_TEXT_SECONDARY if task_done else COLOR_TEXT_PRIMARY,
+                            style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if task_done else None),
+                            no_wrap=False
+                        ),
+                        expand=True,
+                        on_click=lambda e, tid=task_id, td=task_done: handle_task_check(tid, not td, None, subtasks)
+                    )
+
+                    if mob:
+                        top_row = ft.Row([
+                            ft.Column(prio_items, spacing=3, tight=True),
+                            chk,
+                            title_text_ctrl,
+                            drag_handle
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
+
+                        action_row = ft.Row([
+                            ft.Container(expand=True),
+                            edit_btn,
+                            del_btn
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+
+                        task_content = ft.Container(
+                            bgcolor=COLOR_BG_CARD,
+                            border=ft.Border.all(1, card_border_color),
+                            border_radius=12,
+                            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                            content=ft.Column([top_row, action_row], spacing=2)
+                        )
+                    else:
+                        task_content = ft.Container(
+                            bgcolor=COLOR_BG_CARD,
+                            border=ft.Border.all(1, card_border_color),
+                            border_radius=12,
+                            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                            content=ft.Row(
+                                controls=[
+                                    ft.Column(prio_items, spacing=3, tight=True),
+                                    chk,
+                                    title_text_ctrl,
+                                    edit_btn,
+                                    del_btn,
+                                    drag_handle
+                                ],
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                spacing=10
+                            )
+                        )
+            else:
+                task_done = bool(is_done)
+                edit_btn = ft.IconButton(
+                    icon=ft.Icons.EDIT_OUTLINED,
+                    icon_size=16,
+                    icon_color=COLOR_TEXT_SECONDARY,
+                    tooltip="Edytuj zadanie",
+                    width=28,
+                    height=28,
+                    on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
                 )
-                title_row_controls.append(drag_handle)
+                del_btn = ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    icon_size=16,
+                    icon_color=COLOR_PRIO_A,
+                    tooltip="Usuń zadanie",
+                    width=28,
+                    height=28,
+                    on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
+                )
+                chk = ft.Checkbox(
+                    value=task_done,
+                    active_color=COLOR_SUCCESS,
+                    on_change=lambda e, tid=task_id: handle_task_check(tid, e.control.value, None, subtasks)
+                )
+                title_text_ctrl = ft.Container(
+                    content=ft.Text(
+                        title,
+                        size=14,
+                        weight=ft.FontWeight.W_500,
+                        color=COLOR_TEXT_SECONDARY if task_done else COLOR_TEXT_PRIMARY,
+                        style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if task_done else None),
+                        no_wrap=False
+                    ),
+                    expand=True,
+                    on_click=lambda e, tid=task_id, td=task_done: handle_task_check(tid, not td, None, subtasks)
+                )
+
+                daily_badge = ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.WB_SUNNY, size=12, color=COLOR_PRIO_B),
+                        ft.Text("Daily", size=10, color=COLOR_PRIO_B, weight=ft.FontWeight.BOLD)
+                    ], spacing=4, tight=True),
+                    bgcolor="#f59e0b22",
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+                    border_radius=6,
+                    tooltip="Zadanie jest na liście Daily"
+                )
+
+                add_krok_btn = ft.IconButton(
+                    icon=ft.Icons.ADD_TASK,
+                    icon_size=18,
+                    icon_color=COLOR_PRIO_C,
+                    tooltip="Dodaj krok do planu",
+                    width=28,
+                    height=28,
+                    on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
+                ) if mob else ft.TextButton(
+                    "👣 Krok",
+                    icon=ft.Icons.ADD,
+                    style=ft.ButtonStyle(color=COLOR_PRIO_C),
+                    on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
+                )
 
                 subtask_controls = []
                 for idx, st in enumerate(subtasks):
                     st_done = bool(st["is_done"])
                     subtask_controls.append(
                         ft.Container(
-                            padding=ft.Padding.only(left=36, top=2, bottom=2, right=8),
+                            padding=ft.Padding.only(left=28 if mob else 36, top=2, bottom=2, right=4),
                             content=ft.Row(
                                 controls=[
                                     ft.Checkbox(
-                                        label=st["title"],
                                         value=st_done,
                                         active_color=COLOR_SUCCESS,
-                                        expand=True,
-                                        label_style=ft.TextStyle(
-                                            size=13,
-                                            color=COLOR_TEXT_SECONDARY if st_done else COLOR_TEXT_PRIMARY,
-                                            decoration=ft.TextDecoration.LINE_THROUGH if st_done else None
-                                        ),
                                         on_change=lambda e, tid=task_id, subs=subtasks, i=idx: handle_task_check(
                                             tid, e.control.value, i, subs
+                                        )
+                                    ),
+                                    ft.Container(
+                                        content=ft.Text(
+                                            st["title"],
+                                            size=13,
+                                            color=COLOR_TEXT_SECONDARY if st_done else COLOR_TEXT_PRIMARY,
+                                            style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if st_done else None),
+                                            no_wrap=False
+                                        ),
+                                        expand=True,
+                                        on_click=lambda e, tid=task_id, subs=subtasks, i=idx, sd=st_done: handle_task_check(
+                                            tid, not sd, i, subs
                                         )
                                     ),
                                     ft.IconButton(
@@ -1549,21 +1616,58 @@ def main(page: ft.Page):
                                         on_click=lambda e, tid=task_id, i=idx, subs=subtasks: delete_subtask_action(tid, i, subs)
                                     )
                                 ],
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                spacing=6
                             )
                         )
                     )
 
-                task_content = ft.Container(
-                    bgcolor=COLOR_BG_CARD,
-                    border=ft.Border.all(1, card_border_color),
-                    border_radius=12,
-                    padding=ft.Padding.symmetric(horizontal=12, vertical=10),
-                    content=ft.Column(
-                        [ft.Row(title_row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)] + subtask_controls,
-                        spacing=2
+                if mob:
+                    top_row = ft.Row([
+                        ft.Column(prio_items, spacing=3, tight=True),
+                        chk,
+                        title_text_ctrl,
+                        drag_handle
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
+
+                    action_items = []
+                    if is_daily:
+                        action_items.append(daily_badge)
+                    action_items.append(ft.Container(expand=True))
+                    action_items.extend([add_krok_btn, edit_btn, del_btn])
+                    action_row = ft.Row(action_items, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+
+                    card_rows = [top_row, action_row] + subtask_controls
+                    task_content = ft.Container(
+                        bgcolor=COLOR_BG_CARD,
+                        border=ft.Border.all(1, card_border_color),
+                        border_radius=12,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        content=ft.Column(card_rows, spacing=4)
                     )
-                )
+                else:
+                    title_row_controls = [
+                        ft.Column(prio_items, spacing=3, tight=True),
+                        chk,
+                        title_text_ctrl
+                    ]
+                    if is_daily:
+                        title_row_controls.append(daily_badge)
+                    title_row_controls.append(add_krok_btn)
+                    title_row_controls.append(edit_btn)
+                    title_row_controls.append(del_btn)
+                    title_row_controls.append(drag_handle)
+
+                    task_content = ft.Container(
+                        bgcolor=COLOR_BG_CARD,
+                        border=ft.Border.all(1, card_border_color),
+                        border_radius=12,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        content=ft.Column(
+                            [ft.Row(title_row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)] + subtask_controls,
+                            spacing=2
+                        )
+                    )
 
             tasks_column.controls.append(task_content)
 

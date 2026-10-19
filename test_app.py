@@ -315,6 +315,43 @@ def test_ui_edit_delete_dialogs():
     assert len(main.get_tasks(is_daily_view=True)) == 0
 
 
+def test_mobile_task_card_layout_and_actions():
+    main.add_task_db("Zadanie Mobilne", is_daily=1, priority="A")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+    steps = [{"title": "Krok Mobilny", "is_done": 0}]
+    main.update_subtasks_db(task_id, steps)
+
+    page_mob = DummyPage(width=400)
+    main.main(page_mob)
+
+    root_mob = page_mob.controls[0].content
+    content_area = root_mob.content.controls[0]
+    content_col = content_area.content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    card = tasks_col.controls[0]
+
+    # Na telefonie zawartość karty to Column (dwurzędowy nagłówek zapobiegający nakładaniu)
+    assert isinstance(card.content, ft.Column)
+    top_row = card.content.controls[0]
+    action_row = card.content.controls[1]
+    assert isinstance(top_row, ft.Row)
+    assert isinstance(action_row, ft.Row)
+
+    # Przełącz na Master listę
+    bottom_nav = root_mob.content.controls[2].content
+    master_mob_target = bottom_nav.controls[1]
+    master_mob_target.content.on_click(None)
+
+    # Sprawdzenie karty na Masterze na telefonie
+    master_tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    master_card = master_tasks_col.controls[0]
+    assert isinstance(master_card.content, ft.Column)
+    # Rząd 1: prio, chk, text, drag_handle
+    assert len(master_card.content.controls[0].controls) == 4
+    # Rząd 2: action_row z Daily badge i przyciskami
+    assert len(master_card.content.controls[1].controls) >= 3
+
+
 # --- 10. TEST CHMURY GITHUB GIST (Automatyczne tworzenie i pobieranie) ---
 def test_gist_cloud_sync(monkeypatch):
     main.add_task_db("Zadanie Chmurowe", is_daily=1, priority="A")
