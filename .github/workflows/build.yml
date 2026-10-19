@@ -30,10 +30,10 @@ jobs:
         run: |
           pip install flet pytest
 
-      - name: Wstrzyknij wersję z version.txt prosto do main.py
+      - name: Wstrzyknij wersję z version.txt prosto do app_logic.py
         run: |
           VER=$(cat version.txt | tr -d '[:space:]')
-          sed -i "s/FALLBACK_VERSION = \".*\"/FALLBACK_VERSION = \"$VER\"/g" main.py
+          sed -i "s/FALLBACK_VERSION = \".*\"/FALLBACK_VERSION = \"$VER\"/g" app_logic.py
 
       - name: Uruchom testy (pytest)
         run: pytest test_app.py -v

@@ -45,13 +45,13 @@ class DummyPage:
 
 # --- PRZYGOTOWANIE I SPRZĄTANIE ŚRODOWISKA ---
 @pytest.fixture(autouse=True)
-def setup_and_teardown(tmp_path, monkeypatch):
+def setup_and_teardown(tmp_path):
+    import app_logic
     test_db = str(tmp_path / "test_tasks.db")
     test_config = str(tmp_path / "test_config.db")
 
-    main.LOCAL_DB = test_db
-    main.CONFIG_DB = test_config
-    monkeypatch.setattr(main, "check_for_updates", lambda page: None)
+    app_logic.LOCAL_DB = main.LOCAL_DB = test_db
+    app_logic.CONFIG_DB = main.CONFIG_DB = test_config
 
     main.init_db()
 
