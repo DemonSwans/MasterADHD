@@ -3,13 +3,14 @@ import json
 import os
 import shutil
 import sqlite3
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.5.0"
+FALLBACK_VERSION = "1.6.0"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
@@ -64,6 +65,7 @@ def is_newer_version(remote_ver: str, local_ver: str) -> bool:
 # --- KONFIGURACJA LOKALNA ---
 def init_config_db():
     with sqlite3.connect(CONFIG_DB) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)")
 
 
@@ -164,8 +166,10 @@ def pull_database():
 
 
 def push_database():
+    """Synchroniczny zapis (używany w testach oraz przy pierwszym łączeniu w ustawieniach)."""
     mode = get_config("sync_mode", "none")
-    if not os.path.exists(LOCAL_DB): return False, ""
+    if mode == "none" or not os.path.exists(LOCAL_DB):
+        return True, ""
 
     if mode == "gist":
         token = get_config("gist_token", "").strip()
@@ -235,11 +239,23 @@ def push_database():
     return True, ""
 
 
+def push_database_async():
+    """Szybki, nieblokujący zapis w tle dla płynnego działania interfejsu."""
+    mode = get_config("sync_mode", "none")
+    if mode == "none":
+        return
+    if mode == "folder":
+        push_database()
+    else:
+        threading.Thread(target=push_database, daemon=True).start()
+
+
 # --- BAZA DANYCH I LOGIKA ---
 def init_db():
     init_config_db()
     pull_database()
     with sqlite3.connect(LOCAL_DB) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
                      CREATE TABLE IF NOT EXISTS tasks
                      (
@@ -296,24 +312,24 @@ def get_routines():
 
 def add_routine_db(title):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute("INSERT INTO routines (title) VALUES (?)", (title,))
-    push_database()
+    push_database_async()
 
 
 def toggle_routine_db(routine_id, is_done):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE routines SET is_done = ? WHERE id = ?",
                                                          (int(is_done), routine_id))
-    push_database()
+    push_database_async()
 
 
 def delete_routine_db(routine_id):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
-    push_database()
+    push_database_async()
 
 
 def update_subtasks_db(task_id, subtasks_list):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
                                                          (json.dumps(subtasks_list), task_id))
-    push_database()
+    push_database_async()
 
 
 def get_task_priority(task_id):
@@ -332,25 +348,25 @@ def count_daily_priority_a():
 def add_task_db(title, is_daily, priority="B"):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute(
         "INSERT INTO tasks (title, is_daily, priority) VALUES (?, ?, ?)", (title, int(is_daily), priority))
-    push_database()
+    push_database_async()
 
 
 def toggle_done_db(task_id, is_done):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET is_done = ? WHERE id = ?",
                                                          (int(is_done), task_id))
-    push_database()
+    push_database_async()
 
 
 def set_daily_db(task_id, is_daily):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET is_daily = ? WHERE id = ?",
                                                          (int(is_daily), task_id))
-    push_database()
+    push_database_async()
 
 
 def update_priority_db(task_id, new_priority):
     with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET priority = ? WHERE id = ?",
                                                          (new_priority, task_id))
-    push_database()
+    push_database_async()
 
 
 def end_of_day_db():
@@ -358,7 +374,7 @@ def end_of_day_db():
         conn.execute("DELETE FROM tasks WHERE is_done = 1")
         conn.execute("UPDATE tasks SET is_daily = 0 WHERE is_daily = 1 AND is_done = 0")
         conn.execute("UPDATE routines SET is_done = 0")
-    push_database()
+    push_database_async()
 
 
 def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=None):
@@ -428,6 +444,7 @@ def main(page: ft.Page):
     routine_input = ft.TextField(label="Nowa rutyna (np. Leki, Woda)", expand=True)
 
     def change_sync_mode(mode_name):
+        nonlocal max_a_limit
         set_config("sync_mode", mode_name)
         set_config("gist_token", gist_token_input.value.strip())
         set_config("gist_id", gist_id_input.value.strip())
@@ -445,6 +462,12 @@ def main(page: ft.Page):
             status_text.value = f"✓ {push_msg or msg}"
             warning_text.value = ""
 
+        refresh_view()
+
+    def manual_sync(e=None):
+        ok, msg = pull_database()
+        status_text.value = f"✓ {msg}" if ok else ""
+        warning_text.value = "" if ok else f"⚠️ {msg}"
         refresh_view()
 
     # --- OKIENKA DIALOGOWE ---
@@ -568,13 +591,12 @@ def main(page: ft.Page):
         warning_text.value = ""
         refresh_view()
 
-    # --- NAWIGACJA (PC + MOBILE) ---
+    # --- NAWIGACJA (Błyskawiczne przełączanie bez blokowania sieci) ---
     def switch_view(view_name):
         nonlocal current_view, open_prio_task_id
         current_view = view_name
         open_prio_task_id = None
         status_text.value = warning_text.value = ""
-        if view_name in ("daily", "master"): pull_database()
         refresh_view()
 
     def highlight_nav(box, is_hover, default_border=None):
@@ -602,7 +624,7 @@ def main(page: ft.Page):
 
     def create_mob_nav(icon, label, view):
         return ft.Container(
-            padding=ft.Padding.symmetric(vertical=8, horizontal=16),
+            padding=ft.Padding.symmetric(vertical=8, horizontal=20),
             border_radius=10,
             on_click=lambda e: switch_view(view),
             content=ft.Column([ft.Icon(icon, size=22), ft.Text(label, size=11)], alignment=ft.MainAxisAlignment.CENTER,
@@ -685,6 +707,12 @@ def main(page: ft.Page):
             active_subtask_idx_map[task_id] += 1
         refresh_view()
 
+    def update_max_a(new_limit):
+        nonlocal max_a_limit
+        max_a_limit = new_limit
+        set_config("max_a_limit", new_limit)
+        refresh_view()
+
     def refresh_view():
         mob = is_mobile()
         content_area.padding = 14 if mob else 25
@@ -737,9 +765,9 @@ def main(page: ft.Page):
                 ft.Text("Maks. zadań 'A' na Daily:"),
                 ft.Row([
                     ft.Button("3", bgcolor=ft.Colors.AMBER_700 if max_a_limit == 3 else ft.Colors.GREY_800,
-                              color=ft.Colors.WHITE, on_click=lambda e: (set_config("max_a_limit", 3), refresh_view())),
+                              color=ft.Colors.WHITE, on_click=lambda e: update_max_a(3)),
                     ft.Button("4", bgcolor=ft.Colors.AMBER_700 if max_a_limit == 4 else ft.Colors.GREY_800,
-                              color=ft.Colors.WHITE, on_click=lambda e: (set_config("max_a_limit", 4), refresh_view())),
+                              color=ft.Colors.WHITE, on_click=lambda e: update_max_a(4)),
                 ]), ft.Divider(height=20),
                 ft.Text("☁️ Chmura (GitHub Gist - dla każdego bez serwera)", weight=ft.FontWeight.BOLD,
                         color=ft.Colors.CYAN_400),
@@ -781,22 +809,24 @@ def main(page: ft.Page):
 
             prio_items = [ft.Container(
                 content=ft.Row([ft.Text(prio, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=14)],
-                               alignment=ft.MainAxisAlignment.CENTER), width=34, height=32, border_radius=6,
+                               alignment=ft.MainAxisAlignment.CENTER), width=36, height=34, border_radius=6,
                 bgcolor=priority_colors[prio] if not is_done else ft.Colors.GREY_700,
                 on_click=lambda e, tid=task_id: toggle_prio_menu(tid))]
             if open_prio_task_id == task_id:
                 for other_p in ("A", "B", "C"):
                     if other_p != prio: prio_items.append(ft.Container(
                         content=ft.Row([ft.Text(other_p, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=13)],
-                                       alignment=ft.MainAxisAlignment.CENTER), width=34, height=28,
+                                       alignment=ft.MainAxisAlignment.CENTER), width=36, height=30,
                         bgcolor=priority_colors[other_p], border_radius=6,
                         on_click=lambda e, tid=task_id, np=other_p, idm=is_daily_mode: change_priority(tid, np, idm)))
 
+            # Szerszy, wygodniejszy uchwyt na telefonie (36px)
+            handle_w = 34 if mob else 28
             drag_handle = ft.Draggable(
                 group="tasks",
                 data=str(task_id),
-                content=ft.Container(width=28, height=36, bgcolor="#2a2e38", border_radius=6),
-                content_when_dragging=ft.Container(width=28, height=36, bgcolor="#2a2e38", border_radius=6,
+                content=ft.Container(width=handle_w, height=38, bgcolor="#2a2e38", border_radius=6),
+                content_when_dragging=ft.Container(width=handle_w, height=38, bgcolor="#2a2e38", border_radius=6,
                                                    opacity=0.3),
                 content_feedback=ft.Container(padding=10, bgcolor=ft.Colors.GREY_800, border_radius=8,
                                               content=ft.Text(title, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
@@ -914,7 +944,7 @@ def main(page: ft.Page):
                                          color=ft.Colors.WHITE, on_click=open_master_modal)
 
         elements = [ft.Row([title_text, ft.Container(expand=True),
-                            ft.IconButton(ft.Icons.SYNC, on_click=lambda e: (pull_database(), refresh_view())),
+                            ft.IconButton(ft.Icons.SYNC, tooltip="Pobierz z chmury", on_click=manual_sync),
                             top_right_button])]
         if is_daily_mode:
             elements.extend([progress_bar, progress_text, ft.Divider(height=8)])

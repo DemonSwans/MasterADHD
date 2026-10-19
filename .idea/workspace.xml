@@ -4,12 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add GitHub Gist cloud sync functionality, introduce app-specific local data folder, update version to 1.4.0, and refine APK build process.">
-      <change afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Update version to 1.5.0">
       <change beforePath="$PROJECT_DIR$/.github/workflows/build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,23 +52,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0000003018452222" />
-      <entry key="MS500" value="1.082869524968122" />
-      <entry key="S2" value="2.050540618697878" />
-      <entry key="S5" value="3.0540146691130516" />
-      <entry key="S10" value="4.117087558116417" />
-      <entry key="S30" value="6.050334952686591" />
-      <entry key="S60" value="6.981989098085884" />
-      <entry key="M2" value="7.806920343723469" />
-      <entry key="M5" value="8.993367371233791" />
-      <entry key="M10" value="9.78065187757531" />
-      <entry key="M15" value="10.13963933101001" />
-      <entry key="M30" value="10.757663675253587" />
-      <entry key="H1" value="11.710627321938299" />
-      <entry key="H2" value="12.829883619009122" />
-      <entry key="H4" value="13.733138029937427" />
-      <entry key="D1" value="14.757687260838267" />
-      <entry key="W1" value="14.96452899337076" />
+      <entry key="MS100" value="1.0000030770941133" />
+      <entry key="MS500" value="1.0790001936533005" />
+      <entry key="S2" value="1.5301600993517472" />
+      <entry key="S5" value="1.7758232948736878" />
+      <entry key="S10" value="1.8808083190307001" />
+      <entry key="S30" value="1.9585772903989063" />
+      <entry key="S60" value="1.979069604470952" />
+      <entry key="M2" value="1.9894794613689322" />
+      <entry key="M5" value="1.9957784277024793" />
+      <entry key="M10" value="1.9978869814274958" />
+      <entry key="M15" value="1.998590824391032" />
+      <entry key="M30" value="1.9992951845149107" />
+      <entry key="H1" value="2.0001614198038222" />
+      <entry key="H2" value="2.0848145520441594" />
+      <entry key="H4" value="3.1176611640559813" />
+      <entry key="D1" value="11.715088235564528" />
+      <entry key="W1" value="16.09692171130915" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -92,23 +90,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.9659364231254719" />
-      <entry key="MS500" value="1.0620757346647274" />
-      <entry key="S2" value="2.0085340703658408" />
-      <entry key="S5" value="3.025952479468254" />
-      <entry key="S10" value="4.100114291173638" />
-      <entry key="S30" value="6.04374961061563" />
-      <entry key="S60" value="6.978400287247743" />
-      <entry key="M2" value="7.804868977478007" />
-      <entry key="M5" value="8.992393800677942" />
-      <entry key="M10" value="9.780123289471446" />
-      <entry key="M15" value="10.139275661516256" />
-      <entry key="M30" value="10.757474053318335" />
-      <entry key="H1" value="11.710527981741336" />
-      <entry key="H2" value="12.829831531247153" />
-      <entry key="H4" value="13.733111038058022" />
-      <entry key="D1" value="14.757682585216559" />
-      <entry key="W1" value="14.964528320347622" />
+      <entry key="MS100" value="0.9659391604288483" />
+      <entry key="MS500" value="1.0707893497435321" />
+      <entry key="S2" value="1.5262284366373633" />
+      <entry key="S5" value="1.7738408374287409" />
+      <entry key="S10" value="1.8797294743367563" />
+      <entry key="S30" value="1.9581960353237422" />
+      <entry key="S60" value="1.9788761254144347" />
+      <entry key="M2" value="1.9893819975405147" />
+      <entry key="M5" value="1.9957392668585505" />
+      <entry key="M10" value="1.9978673716626068" />
+      <entry key="M15" value="1.9985777446845638" />
+      <entry key="M30" value="1.9992886413940645" />
+      <entry key="H1" value="2.0001581430669697" />
+      <entry key="H2" value="2.084812570598743" />
+      <entry key="H4" value="3.1176581489211985" />
+      <entry key="D1" value="11.715085021183857" />
+      <entry key="W1" value="16.096921057822904" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -120,27 +118,28 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;Python tests.Python tests in test_app.py.executor&quot;: &quot;Run&quot;,
-    &quot;Python.main.executor&quot;: &quot;Run&quot;,
-    &quot;Python.test_app.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;python.packages.toolwindow.project.migrated.to.right.top.v2&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python tests.Python tests in test_app.py.executor": "Run",
+    "Python.generate_icon.executor": "Run",
+    "Python.main.executor": "Run",
+    "Python.test_app.executor": "Run",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "master",
+    "ignore.virus.scanning.warn.message": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "python.packages.toolwindow.project.migrated.to.right.top.v2": "true"
   }
-}</component>
+}]]></component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -158,7 +157,7 @@
       <updated>1792105691165</updated>
       <workItem from="1792159635957" duration="6650000" />
       <workItem from="1792274222548" duration="1865000" />
-      <workItem from="1792349402044" duration="6244000" />
+      <workItem from="1792349402044" duration="8694000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -320,7 +319,23 @@
       <option name="project" value="LOCAL" />
       <updated>1792400928305</updated>
     </task>
-    <option name="localTasksCounter" value="21" />
+    <task id="LOCAL-00021" summary="Add GitHub Gist cloud sync functionality, introduce app-specific local data folder, update version to 1.4.0, and refine APK build process.">
+      <option name="closed" value="true" />
+      <created>1792401542245</created>
+      <option name="number" value="00021" />
+      <option name="presentableId" value="LOCAL-00021" />
+      <option name="project" value="LOCAL" />
+      <updated>1792401542245</updated>
+    </task>
+    <task id="LOCAL-00022" summary="Update version to 1.5.0">
+      <option name="closed" value="true" />
+      <created>1792401557207</created>
+      <option name="number" value="00022" />
+      <option name="presentableId" value="LOCAL-00022" />
+      <option name="project" value="LOCAL" />
+      <updated>1792401557207</updated>
+    </task>
+    <option name="localTasksCounter" value="23" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -354,11 +369,13 @@
     <MESSAGE value="Refine versioning logic with `FALLBACK_VERSION`, streamline update checker for the `master` branch, and enhance CI/CD workflow for 64-bit APK builds." />
     <MESSAGE value="Update APK build step to include storage permissions" />
     <MESSAGE value="Add GitHub Gist cloud sync functionality, introduce app-specific local data folder, update version to 1.4.0, and refine APK build process." />
-    <option name="LAST_COMMIT_MESSAGE" value="Add GitHub Gist cloud sync functionality, introduce app-specific local data folder, update version to 1.4.0, and refine APK build process." />
+    <MESSAGE value="Update version to 1.5.0" />
+    <option name="LAST_COMMIT_MESSAGE" value="Update version to 1.5.0" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792400906545" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792356960870" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792416906716" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/MasterADHD$test_app.coverage" NAME="test_app Coverage Results" MODIFIED="1792167685655" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/MasterADHD$generate_icon.coverage" NAME="generate_icon Coverage Results" MODIFIED="1792418367596" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>

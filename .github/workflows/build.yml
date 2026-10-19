@@ -39,7 +39,7 @@ jobs:
         run: pytest test_app.py -v
 
       - name: Budowanie APK (64-bit)
-        run: yes | flet build apk --arch arm64-v8a
+        run: yes | flet build apk --arch arm64-v8a --project "MasterADHD"
 
       - name: Zmień nazwę na stałą
         run: find build/apk -name "*.apk" -exec mv {} MasterADHD.apk \;
@@ -49,4 +49,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release delete latest --cleanup-tag -y || true
-          gh release create latest MasterADHD.apk -t "Najnowsza Wersja" -n "Paczka stworzona automatycznie z gałęzi master."
+          gh release create latest MasterADHD.apk -t "Najnowsza Wersja" -n "Paczka z ikoną z folderu assets i silnikiem OTA."
