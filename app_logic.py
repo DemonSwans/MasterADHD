@@ -14,7 +14,7 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.4"
+FALLBACK_VERSION = "1.6.6"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
@@ -373,6 +373,40 @@ def update_priority_db(task_id, new_priority):
     push_database_async()
 
 
+def delete_task_db(task_id):
+    with sqlite3.connect(LOCAL_DB) as conn:
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    push_database_async()
+
+
+def edit_task_title_db(task_id, new_title):
+    with sqlite3.connect(LOCAL_DB) as conn:
+        conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (new_title.strip(), task_id))
+    push_database_async()
+
+
+def delete_subtask_db(task_id, subtask_idx):
+    with sqlite3.connect(LOCAL_DB) as conn:
+        row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row and row[0]:
+            subtasks = json.loads(row[0])
+            if 0 <= subtask_idx < len(subtasks):
+                subtasks.pop(subtask_idx)
+                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?", (json.dumps(subtasks), task_id))
+    push_database_async()
+
+
+def edit_subtask_title_db(task_id, subtask_idx, new_title):
+    with sqlite3.connect(LOCAL_DB) as conn:
+        row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row and row[0]:
+            subtasks = json.loads(row[0])
+            if 0 <= subtask_idx < len(subtasks):
+                subtasks[subtask_idx]["title"] = new_title.strip()
+                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?", (json.dumps(subtasks), task_id))
+    push_database_async()
+
+
 def end_of_day_db():
     with sqlite3.connect(LOCAL_DB) as conn:
         conn.execute("DELETE FROM tasks WHERE is_done = 1")
@@ -655,11 +689,130 @@ def main(page: ft.Page):
                                     actions=[ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
                                              ft.Button("Dodaj", on_click=save_subtask)])
 
-    def close_dialogs():
-        quick_dialog.open = master_dialog.open = subtask_dialog.open = False
+    edit_task_field = ft.TextField(
+        hint_text="Treść zadania...",
+        autofocus=True,
+        bgcolor=COLOR_BG_SURFACE,
+        border_color=COLOR_BG_BORDER,
+        focused_border_color=COLOR_PRIO_B,
+        on_submit=lambda e: save_task_edit()
+    )
+    editing_task_id = None
+
+    def open_edit_task_dialog(task_id, current_title):
+        nonlocal editing_task_id
+        editing_task_id = task_id
+        edit_task_field.value = current_title
+        edit_task_dialog.open = True
         page.update()
 
-    page.overlay.extend([quick_dialog, master_dialog, subtask_dialog])
+    def save_task_edit(e=None):
+        nonlocal editing_task_id
+        val = edit_task_field.value.strip()
+        if editing_task_id and val:
+            edit_task_title_db(editing_task_id, val)
+            edit_task_dialog.open = False
+            status_text.value = "✓ Zaktualizowano zadanie"
+            warning_text.value = ""
+            refresh_view()
+
+    edit_task_dialog = ft.AlertDialog(
+        title=ft.Text("✏️ Edytuj zadanie"),
+        content=edit_task_field,
+        actions=[
+            ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
+            ft.Button("Zapisz", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=save_task_edit)
+        ]
+    )
+
+    deleting_task_id = None
+    delete_task_text = ft.Text("", size=13, color=COLOR_TEXT_PRIMARY)
+
+    def open_delete_task_dialog(task_id, current_title):
+        nonlocal deleting_task_id
+        deleting_task_id = task_id
+        delete_task_text.value = f"Czy na pewno chcesz usunąć to zadanie?\n\n„{current_title}”"
+        delete_task_dialog.open = True
+        page.update()
+
+    def confirm_delete_task(e=None):
+        nonlocal deleting_task_id
+        if deleting_task_id:
+            delete_task_db(deleting_task_id)
+            if deleting_task_id in active_subtask_idx_map:
+                del active_subtask_idx_map[deleting_task_id]
+            delete_task_dialog.open = False
+            status_text.value = "✓ Usunięto zadanie"
+            warning_text.value = ""
+            refresh_view()
+
+    delete_task_dialog = ft.AlertDialog(
+        title=ft.Text("🗑️ Usunąć zadanie?"),
+        content=delete_task_text,
+        actions=[
+            ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
+            ft.Button("Usuń", bgcolor="#ef444422", color=COLOR_PRIO_A, on_click=confirm_delete_task)
+        ]
+    )
+
+    edit_subtask_field = ft.TextField(
+        hint_text="Treść kroku...",
+        autofocus=True,
+        bgcolor=COLOR_BG_SURFACE,
+        border_color=COLOR_BG_BORDER,
+        focused_border_color=COLOR_PRIO_C,
+        on_submit=lambda e: save_subtask_edit()
+    )
+    editing_subtask_task_id = None
+    editing_subtask_idx = None
+    editing_subtask_list = []
+
+    def open_edit_subtask_dialog(task_id, subtask_idx, current_subtasks):
+        nonlocal editing_subtask_task_id, editing_subtask_idx, editing_subtask_list
+        editing_subtask_task_id = task_id
+        editing_subtask_idx = subtask_idx
+        editing_subtask_list = list(current_subtasks)
+        edit_subtask_field.value = current_subtasks[subtask_idx]["title"]
+        edit_subtask_dialog.open = True
+        page.update()
+
+    def save_subtask_edit(e=None):
+        nonlocal editing_subtask_task_id, editing_subtask_idx, editing_subtask_list
+        val = edit_subtask_field.value.strip()
+        if editing_subtask_task_id and editing_subtask_idx is not None and val:
+            editing_subtask_list[editing_subtask_idx]["title"] = val
+            update_subtasks_db(editing_subtask_task_id, editing_subtask_list)
+            edit_subtask_dialog.open = False
+            status_text.value = "✓ Zaktualizowano krok"
+            warning_text.value = ""
+            refresh_view()
+
+    edit_subtask_dialog = ft.AlertDialog(
+        title=ft.Text("✏️ Edytuj krok"),
+        content=edit_subtask_field,
+        actions=[
+            ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
+            ft.Button("Zapisz", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=save_subtask_edit)
+        ]
+    )
+
+    def delete_subtask_action(task_id, subtask_idx, current_subtasks):
+        if 0 <= subtask_idx < len(current_subtasks):
+            current_subtasks.pop(subtask_idx)
+            update_subtasks_db(task_id, current_subtasks)
+            if task_id in active_subtask_idx_map:
+                if active_subtask_idx_map[task_id] >= len(current_subtasks):
+                    active_subtask_idx_map[task_id] = max(0, len(current_subtasks) - 1)
+            status_text.value = "✓ Usunięto krok"
+            warning_text.value = ""
+            refresh_view()
+
+    def close_dialogs():
+        quick_dialog.open = master_dialog.open = subtask_dialog.open = False
+        edit_task_dialog.open = delete_task_dialog.open = edit_subtask_dialog.open = False
+        page.update()
+
+    page.overlay.extend([quick_dialog, master_dialog, subtask_dialog, edit_task_dialog, delete_task_dialog, edit_subtask_dialog])
 
     def open_quick_modal(e):
         quick_dump_field.value = ""
@@ -1158,20 +1311,32 @@ def main(page: ft.Page):
                                 ft.Text(title, size=12, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500),
                                 step_badge
                             ], spacing=6, tight=True),
-                            ft.Checkbox(
-                                label=current_st["title"],
-                                value=step_done,
-                                active_color=COLOR_SUCCESS,
-                                label_style=ft.TextStyle(
-                                    size=14,
-                                    weight=ft.FontWeight.W_500,
-                                    color=COLOR_TEXT_SECONDARY if step_done else COLOR_TEXT_PRIMARY,
-                                    decoration=ft.TextDecoration.LINE_THROUGH if step_done else None
+                            ft.Row([
+                                ft.Checkbox(
+                                    label=current_st["title"],
+                                    value=step_done,
+                                    active_color=COLOR_SUCCESS,
+                                    expand=True,
+                                    label_style=ft.TextStyle(
+                                        size=14,
+                                        weight=ft.FontWeight.W_500,
+                                        color=COLOR_TEXT_SECONDARY if step_done else COLOR_TEXT_PRIMARY,
+                                        decoration=ft.TextDecoration.LINE_THROUGH if step_done else None
+                                    ),
+                                    on_change=lambda e, tid=task_id, s_idx=idx, s_list=subtasks: handle_task_check(
+                                        tid, e.control.value, s_idx, s_list
+                                    )
                                 ),
-                                on_change=lambda e, tid=task_id, s_idx=idx, s_list=subtasks: handle_task_check(
-                                    tid, e.control.value, s_idx, s_list
+                                ft.IconButton(
+                                    icon=ft.Icons.EDIT_NOTE,
+                                    icon_size=16,
+                                    icon_color=COLOR_TEXT_SECONDARY,
+                                    tooltip="Edytuj ten krok",
+                                    width=26,
+                                    height=26,
+                                    on_click=lambda e, tid=task_id, i=idx, subs=subtasks: open_edit_subtask_dialog(tid, i, subs)
                                 )
-                            )
+                            ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
                         ], spacing=1, expand=True)
                     ]
 
@@ -1185,6 +1350,28 @@ def main(page: ft.Page):
                             )
                         )
 
+                    row_controls.append(
+                        ft.IconButton(
+                            icon=ft.Icons.EDIT_OUTLINED,
+                            icon_size=16,
+                            icon_color=COLOR_TEXT_SECONDARY,
+                            tooltip="Edytuj zadanie",
+                            width=28,
+                            height=28,
+                            on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
+                        )
+                    )
+                    row_controls.append(
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            icon_size=16,
+                            icon_color=COLOR_PRIO_A,
+                            tooltip="Usuń zadanie",
+                            width=28,
+                            height=28,
+                            on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
+                        )
+                    )
                     row_controls.append(drag_handle)
 
                     task_content = ft.Container(
@@ -1218,6 +1405,24 @@ def main(page: ft.Page):
                                     on_change=lambda e, tid=task_id: handle_task_check(
                                         tid, e.control.value, None, subtasks
                                     )
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.EDIT_OUTLINED,
+                                    icon_size=16,
+                                    icon_color=COLOR_TEXT_SECONDARY,
+                                    tooltip="Edytuj zadanie",
+                                    width=28,
+                                    height=28,
+                                    on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.DELETE_OUTLINE,
+                                    icon_size=16,
+                                    icon_color=COLOR_PRIO_A,
+                                    tooltip="Usuń zadanie",
+                                    width=28,
+                                    height=28,
+                                    on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
                                 ),
                                 drag_handle
                             ],
@@ -1279,6 +1484,28 @@ def main(page: ft.Page):
                             on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
                         )
                     )
+                title_row_controls.append(
+                    ft.IconButton(
+                        icon=ft.Icons.EDIT_OUTLINED,
+                        icon_size=16,
+                        icon_color=COLOR_TEXT_SECONDARY,
+                        tooltip="Edytuj zadanie",
+                        width=28,
+                        height=28,
+                        on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
+                    )
+                )
+                title_row_controls.append(
+                    ft.IconButton(
+                        icon=ft.Icons.DELETE_OUTLINE,
+                        icon_size=16,
+                        icon_color=COLOR_PRIO_A,
+                        tooltip="Usuń zadanie",
+                        width=28,
+                        height=28,
+                        on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
+                    )
+                )
                 title_row_controls.append(drag_handle)
 
                 subtask_controls = []
@@ -1286,7 +1513,7 @@ def main(page: ft.Page):
                     st_done = bool(st["is_done"])
                     subtask_controls.append(
                         ft.Container(
-                            padding=ft.Padding.only(left=36, top=2, bottom=2),
+                            padding=ft.Padding.only(left=36, top=2, bottom=2, right=8),
                             content=ft.Row(
                                 controls=[
                                     ft.Checkbox(
@@ -1302,8 +1529,27 @@ def main(page: ft.Page):
                                         on_change=lambda e, tid=task_id, subs=subtasks, i=idx: handle_task_check(
                                             tid, e.control.value, i, subs
                                         )
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.EDIT_OUTLINED,
+                                        icon_size=14,
+                                        icon_color=COLOR_TEXT_SECONDARY,
+                                        tooltip="Edytuj krok",
+                                        width=26,
+                                        height=26,
+                                        on_click=lambda e, tid=task_id, i=idx, subs=subtasks: open_edit_subtask_dialog(tid, i, subs)
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.CLOSE,
+                                        icon_size=14,
+                                        icon_color=COLOR_PRIO_A,
+                                        tooltip="Usuń krok",
+                                        width=26,
+                                        height=26,
+                                        on_click=lambda e, tid=task_id, i=idx, subs=subtasks: delete_subtask_action(tid, i, subs)
                                     )
-                                ]
+                                ],
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER
                             )
                         )
                     )

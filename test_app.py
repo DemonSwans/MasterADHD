@@ -81,6 +81,23 @@ def test_tasks_crud():
     assert main.count_daily_priority_a() == 0
 
 
+def test_task_edit_and_delete():
+    main.add_task_db("Stary Tytuł", is_daily=1, priority="B")
+    task = main.get_tasks(is_daily_view=True)[0]
+    task_id = task[0]
+    assert task[1] == "Stary Tytuł"
+
+    # Edycja tytułu
+    main.edit_task_title_db(task_id, "Nowy Lepszy Tytuł")
+    updated = main.get_tasks(is_daily_view=True)[0]
+    assert updated[1] == "Nowy Lepszy Tytuł"
+
+    # Usunięcie zadania
+    main.delete_task_db(task_id)
+    assert len(main.get_tasks(is_daily_view=True)) == 0
+    assert len(main.get_tasks(is_daily_view=False)) == 0
+
+
 # --- 2. TESTY RUTYN (NAWYKÓW) ---
 def test_routines_crud():
     main.add_routine_db("Leki")
@@ -110,6 +127,25 @@ def test_subtasks():
     assert len(saved_steps) == 2
     assert saved_steps[1]["title"] == "Krok 2"
     assert saved_steps[1]["is_done"] == 1
+
+
+def test_subtask_edit_and_delete():
+    main.add_task_db("Zadanie z Krokami", is_daily=0, priority="B")
+    task_id = main.get_tasks(is_daily_view=False)[0][0]
+
+    steps = [{"title": "Krok A", "is_done": 0}, {"title": "Krok B", "is_done": 0}]
+    main.update_subtasks_db(task_id, steps)
+
+    # Edycja kroku
+    main.edit_subtask_title_db(task_id, 0, "Krok A Poprawiony")
+    task = main.get_tasks(is_daily_view=False)[0]
+    assert task[5][0]["title"] == "Krok A Poprawiony"
+
+    # Usunięcie kroku
+    main.delete_subtask_db(task_id, 0)
+    task_after_delete = main.get_tasks(is_daily_view=False)[0]
+    assert len(task_after_delete[5]) == 1
+    assert task_after_delete[5][0]["title"] == "Krok B"
 
 
 # --- 4. TEST MATEMATYKI PASKA POSTĘPU ---
@@ -239,6 +275,44 @@ def test_interactive_callbacks_and_drag_drop():
     master_mob_target.content.on_click(None)
     settings_mob_box.on_click(None)
     daily_mob_target.content.on_click(None)
+
+
+def test_ui_edit_delete_dialogs():
+    main.add_task_db("Zadanie Dialogowe", is_daily=1, priority="B")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+    steps = [{"title": "Krok 1", "is_done": 0}]
+    main.update_subtasks_db(task_id, steps)
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    assert len(page.overlay) == 6
+    edit_task_dialog = page.overlay[3]
+    delete_task_dialog = page.overlay[4]
+    edit_subtask_dialog = page.overlay[5]
+
+    # 1. Edycja zadania przez dialog
+    root_pc = page.controls[0].content
+    content_col = root_pc.content.controls[2].content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    card = tasks_col.controls[0]
+    edit_btn = card.content.controls[2]
+    edit_btn.on_click(None)
+    assert edit_task_dialog.open is True
+
+    edit_task_dialog.content.value = "Zadanie Przemianowane"
+    edit_task_dialog.actions[1].on_click(None)
+    assert edit_task_dialog.open is False
+    assert main.get_tasks(is_daily_view=True)[0][1] == "Zadanie Przemianowane"
+
+    # 2. Usunięcie zadania przez dialog
+    card_after_edit = tasks_col.controls[0]
+    del_btn = card_after_edit.content.controls[3]
+    del_btn.on_click(None)
+    assert delete_task_dialog.open is True
+    delete_task_dialog.actions[1].on_click(None)
+    assert delete_task_dialog.open is False
+    assert len(main.get_tasks(is_daily_view=True)) == 0
 
 
 # --- 10. TEST CHMURY GITHUB GIST (Automatyczne tworzenie i pobieranie) ---
