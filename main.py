@@ -178,9 +178,17 @@ def load_and_run(page: ft.Page):
     try:
         # 2. Jeśli mamy pobrany nowszy moduł w pamięci podręcznej OTA -> ładujemy go!
         page.controls.clear()
-        if os.path.exists(OTA_LOGIC_FILE):
-            print(f"[OTA] Ładowanie zaktualizowanego modułu z {OTA_LOGIC_FILE}")
-            spec = importlib.util.spec_from_file_location("app_logic_ota", OTA_LOGIC_FILE)
+        target_ota = OTA_LOGIC_FILE
+        if not os.path.exists(target_ota):
+            base_env = os.environ.get("FLET_APP_STORAGE_DATA")
+            if base_env:
+                alt_ota = os.path.join(base_env, "data", "app_logic_ota.py")
+                if os.path.exists(alt_ota):
+                    target_ota = alt_ota
+
+        if os.path.exists(target_ota):
+            print(f"[OTA] Ładowanie zaktualizowanego modułu z {target_ota}")
+            spec = importlib.util.spec_from_file_location("app_logic_ota", target_ota)
             mod = importlib.util.module_from_spec(spec)
             sys.modules["app_logic"] = mod
             spec.loader.exec_module(mod)

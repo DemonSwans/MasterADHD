@@ -517,15 +517,29 @@ def main(page: ft.Page):
             # Weryfikacja składni przed zapisem
             compile(new_code, "app_logic_ota.py", "exec")
 
-            ota_file = os.path.join(APP_DIR, "app_logic_ota.py")
-            ver_file = os.path.join(APP_DIR, "ota_version.txt")
-            with open(ota_file, "w", encoding="utf-8") as f:
-                f.write(new_code)
-            with open(ver_file, "w", encoding="utf-8") as f:
-                f.write(remote_ver)
+            # Zapisujemy w obu potencjalnych lokalizacjach (dla kompatybilności ze wszystkimi wersjami main.py)
+            targets = [APP_DIR]
+            base_env = os.environ.get("FLET_APP_STORAGE_DATA")
+            if base_env:
+                targets.append(os.path.join(base_env, ".master_adhd_data"))
+                targets.append(os.path.join(base_env, "data"))
+            else:
+                targets.append(os.path.join(os.path.expanduser("~"), ".master_adhd_data"))
+
+            for target_dir in set(targets):
+                try:
+                    os.makedirs(target_dir, exist_ok=True)
+                    with open(os.path.join(target_dir, "app_logic_ota.py"), "w", encoding="utf-8") as f:
+                        f.write(new_code)
+                    with open(os.path.join(target_dir, "ota_version.txt"), "w", encoding="utf-8") as f:
+                        f.write(remote_ver)
+                except Exception:
+                    pass
 
             status_text.value = f"✓ Pomyślnie pobrano v{remote_ver}! Przeładowywanie..."
             page.update()
+
+            ota_file = os.path.join(APP_DIR, "app_logic_ota.py")
 
             # Dynamiczne przeładowanie modułu w pamięci i natychmiastowe odświeżenie okna
             spec = importlib.util.spec_from_file_location("app_logic_ota", ota_file)
@@ -978,8 +992,12 @@ def main(page: ft.Page):
                         ft.Text("Aktualizacje OTA (GitHub)", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
                     ], spacing=8),
                     ft.Text(f"Wersja wbudowana: v{FALLBACK_VERSION} | Aktywna: v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
-                    ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
-                              on_click=trigger_manual_ota)
+                    ft.Row([
+                        ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                                  on_click=trigger_manual_ota),
+                        ft.Button("🛑 Zamknij aplikację (Wymuś restart)", bgcolor="#ef444422", color=COLOR_PRIO_A,
+                                  on_click=lambda e: os._exit(0))
+                    ], wrap=True, spacing=10)
                 ], spacing=10)
             )
 
