@@ -1,16 +1,20 @@
 import base64
+import importlib.util
 import json
 import os
 import shutil
 import sqlite3
+import ssl
+import sys
 import threading
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.3"
+FALLBACK_VERSION = "1.6.4"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
@@ -484,19 +488,56 @@ def main(page: ft.Page):
 
     def trigger_manual_ota(e=None):
         try:
-            import main
             status_text.value = "⏳ Sprawdzanie i pobieranie najnowszej wersji z GitHuba..."
+            warning_text.value = ""
             page.update()
-            updated, ver = main.check_and_download_ota(force=True)
-            if updated:
-                status_text.value = f"✓ Pomyślnie pobrano wersję v{ver}! Uruchom aplikację ponownie, aby wczytać nowy moduł."
-                warning_text.value = ""
-            else:
-                status_text.value = f"ℹ️ Kod zweryfikowany z GitHub (wersja: v{ver})."
-                warning_text.value = ""
-            refresh_view()
+
+            github_base = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
+            ts = int(datetime.now().timestamp())
+            headers = {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "User-Agent": "MasterADHD-OTA/1.0"
+            }
+            try:
+                ctx = ssl._create_unverified_context()
+            except Exception:
+                ctx = None
+
+            url_ver = f"{github_base}/version.txt?t={ts}"
+            req_ver = urllib.request.Request(url_ver, headers=headers)
+            with urllib.request.urlopen(req_ver, timeout=6, context=ctx) as resp:
+                remote_ver = resp.read().decode("utf-8").strip()
+
+            url_code = f"{github_base}/app_logic.py?t={ts}"
+            req_code = urllib.request.Request(url_code, headers=headers)
+            with urllib.request.urlopen(req_code, timeout=12, context=ctx) as resp_code:
+                new_code = resp_code.read().decode("utf-8")
+
+            # Weryfikacja składni przed zapisem
+            compile(new_code, "app_logic_ota.py", "exec")
+
+            ota_file = os.path.join(APP_DIR, "app_logic_ota.py")
+            ver_file = os.path.join(APP_DIR, "ota_version.txt")
+            with open(ota_file, "w", encoding="utf-8") as f:
+                f.write(new_code)
+            with open(ver_file, "w", encoding="utf-8") as f:
+                f.write(remote_ver)
+
+            status_text.value = f"✓ Pomyślnie pobrano v{remote_ver}! Przeładowywanie..."
+            page.update()
+
+            # Dynamiczne przeładowanie modułu w pamięci i natychmiastowe odświeżenie okna
+            spec = importlib.util.spec_from_file_location("app_logic_ota", ota_file)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["app_logic"] = mod
+            spec.loader.exec_module(mod)
+            page.controls.clear()
+            mod.main(page)
+            return
         except Exception as ex:
-            warning_text.value = f"Błąd OTA: {ex}"
+            warning_text.value = f"Błąd aktualizacji OTA: {ex}"
+            status_text.value = ""
             refresh_view()
 
     # --- SZYBKIE WPROWADZANIE (Inline Quick Input) ---

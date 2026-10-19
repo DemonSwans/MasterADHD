@@ -4,7 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Enhance OTA update mechanism: add SSL context fallback, progress callbacks, and manual update trigger. Improve UI with progress indicators and update card." />
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Enhance OTA update mechanism: add SSL context fallback, progress callbacks, and manual update trigger. Improve UI with progress indicators and update card.">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -48,23 +50,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.1664995767150304" />
-      <entry key="MS500" value="3.670733479341867" />
-      <entry key="S2" value="14.44879507140129" />
-      <entry key="S5" value="27.38892231351512" />
-      <entry key="S10" value="41.2833231419756" />
-      <entry key="S30" value="70.98521221175359" />
-      <entry key="S60" value="86.63800855453096" />
-      <entry key="M2" value="97.33802477771289" />
-      <entry key="M5" value="116.18514837154801" />
-      <entry key="M10" value="156.93416277364693" />
-      <entry key="M15" value="200.5703830198899" />
-      <entry key="M30" value="304.4608434245292" />
-      <entry key="H1" value="410.0812513447729" />
-      <entry key="H2" value="488.08693702480946" />
-      <entry key="H4" value="536.5112273071803" />
-      <entry key="D1" value="590.2476567686195" />
-      <entry key="W1" value="604.3205207062136" />
+      <entry key="MS100" value="1.9845198113839957" />
+      <entry key="MS500" value="5.343260526111386" />
+      <entry key="S2" value="13.062315996318222" />
+      <entry key="S5" value="27.563241109706073" />
+      <entry key="S10" value="48.812276246393786" />
+      <entry key="S30" value="88.04076190885822" />
+      <entry key="S60" value="108.29350973746196" />
+      <entry key="M2" value="139.71245187626823" />
+      <entry key="M5" value="212.77947731126142" />
+      <entry key="M10" value="288.5800668583984" />
+      <entry key="M15" value="347.5324433501819" />
+      <entry key="M30" value="481.56966186208734" />
+      <entry key="H1" value="629.2073031882423" />
+      <entry key="H2" value="747.4687359001791" />
+      <entry key="H4" value="824.3206007355707" />
+      <entry key="D1" value="907.5087968595947" />
+      <entry key="W1" value="927.3327544432265" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -86,23 +88,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.127840364474937" />
-      <entry key="MS500" value="3.6467371610395802" />
-      <entry key="S2" value="14.424276961638856" />
-      <entry key="S5" value="27.370137131387416" />
-      <entry key="S10" value="41.269175132629805" />
-      <entry key="S30" value="70.97712565949033" />
-      <entry key="S60" value="86.63307805944734" />
-      <entry key="M2" value="97.33525686802065" />
-      <entry key="M5" value="116.1838277679338" />
-      <entry key="M10" value="156.93326679496678" />
-      <entry key="M15" value="200.56961323523447" />
-      <entry key="M30" value="304.46024900057563" />
-      <entry key="H1" value="410.0808461107726" />
-      <entry key="H2" value="488.0866941468421" />
-      <entry key="H4" value="536.5110926251997" />
-      <entry key="D1" value="590.2476298511912" />
-      <entry key="W1" value="604.3205165596589" />
+      <entry key="MS100" value="1.923483234109944" />
+      <entry key="MS500" value="5.310643667229466" />
+      <entry key="S2" value="13.042321149323541" />
+      <entry key="S5" value="27.54610624590308" />
+      <entry key="S10" value="48.79700683796908" />
+      <entry key="S30" value="88.03157421664706" />
+      <entry key="S60" value="108.2878595985125" />
+      <entry key="M2" value="139.7087923803269" />
+      <entry key="M5" value="212.77722496824867" />
+      <entry key="M10" value="288.57852261813093" />
+      <entry key="M15" value="347.53119135575145" />
+      <entry key="M30" value="481.5687752616867" />
+      <entry key="H1" value="629.2067129172844" />
+      <entry key="H2" value="747.468381113612" />
+      <entry key="H4" value="824.3204031812734" />
+      <entry key="D1" value="907.508758267042" />
+      <entry key="W1" value="927.3327485922297" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -153,7 +155,7 @@
       <updated>1792105691165</updated>
       <workItem from="1792159635957" duration="6650000" />
       <workItem from="1792274222548" duration="1865000" />
-      <workItem from="1792349402044" duration="13021000" />
+      <workItem from="1792349402044" duration="14225000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -379,7 +381,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792422882428</updated>
     </task>
-    <option name="localTasksCounter" value="29" />
+    <task id="LOCAL-00029" summary="Enhance OTA update mechanism: add SSL context fallback, progress callbacks, and manual update trigger. Improve UI with progress indicators and update card.">
+      <option name="closed" value="true" />
+      <created>1792423804069</created>
+      <option name="number" value="00029" />
+      <option name="presentableId" value="LOCAL-00029" />
+      <option name="project" value="LOCAL" />
+      <updated>1792423804069</updated>
+    </task>
+    <option name="localTasksCounter" value="30" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -424,7 +434,7 @@
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792422640662" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792424228385" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/MasterADHD$test_app.coverage" NAME="test_app Coverage Results" MODIFIED="1792167685655" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/MasterADHD$generate_icon.coverage" NAME="generate_icon Coverage Results" MODIFIED="1792418367596" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
