@@ -4,9 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add editing and deletion support for tasks and subtasks; bump version to 1.6.6">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Improve mobile layout for task items and bump version to 1.6.7">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/version.txt" beforeDir="false" afterPath="$PROJECT_DIR$/version.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -52,23 +53,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.7555869569021993" />
-      <entry key="MS500" value="5.233014881373092" />
-      <entry key="S2" value="13.493705865836983" />
-      <entry key="S5" value="23.745689434006987" />
-      <entry key="S10" value="34.146588028420105" />
-      <entry key="S30" value="47.6034857071922" />
-      <entry key="S60" value="52.40382319149074" />
-      <entry key="M2" value="55.118576986110284" />
-      <entry key="M5" value="58.79753584447246" />
-      <entry key="M10" value="79.05965145314994" />
-      <entry key="M15" value="122.82197664745323" />
-      <entry key="M30" value="306.36398193270793" />
-      <entry key="H1" value="610.1253557839669" />
-      <entry key="H2" value="920.2657814324481" />
-      <entry key="H4" value="1151.1726471400323" />
-      <entry key="D1" value="1408.16905422059" />
-      <entry key="W1" value="1463.2564577719638" />
+      <entry key="MS100" value="1.0825024062106277" />
+      <entry key="MS500" value="2.0489944337299892" />
+      <entry key="S2" value="4.116806643862409" />
+      <entry key="S5" value="5.564781171935505" />
+      <entry key="S10" value="7.65035433219568" />
+      <entry key="S30" value="21.821408539899156" />
+      <entry key="S60" value="34.05441414669217" />
+      <entry key="M2" value="44.22016483110052" />
+      <entry key="M5" value="61.33642208805959" />
+      <entry key="M10" value="87.08827537834932" />
+      <entry key="M15" value="123.95364071510643" />
+      <entry key="M30" value="286.08300133396193" />
+      <entry key="H1" value="585.3591179451604" />
+      <entry key="H2" value="913.3421144509247" />
+      <entry key="H4" value="1167.1554192097087" />
+      <entry key="D1" value="1455.8950282569579" />
+      <entry key="W1" value="1518.0252373285716" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -90,23 +91,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.7000064295004897" />
-      <entry key="MS500" value="5.197015822685566" />
-      <entry key="S2" value="13.469882837547939" />
-      <entry key="S5" value="23.728657291534223" />
-      <entry key="S10" value="34.134156045213224" />
-      <entry key="S30" value="47.59763057692635" />
-      <entry key="S60" value="52.40058879847505" />
-      <entry key="M2" value="55.116872926092995" />
-      <entry key="M5" value="58.796806490854955" />
-      <entry key="M10" value="79.05916908003249" />
-      <entry key="M15" value="122.82149836474476" />
-      <entry key="M30" value="306.36341913550746" />
-      <entry key="H1" value="610.1248013004413" />
-      <entry key="H2" value="920.2653617308441" />
-      <entry key="H4" value="1151.17238298229" />
-      <entry key="D1" value="1408.168998021447" />
-      <entry key="W1" value="1463.2564492060226" />
+      <entry key="MS100" value="1.0390041569959174" />
+      <entry key="MS500" value="2.0339779473123207" />
+      <entry key="S2" value="4.10960329712856" />
+      <entry key="S5" value="5.5609095435591405" />
+      <entry key="S10" value="7.647656287054085" />
+      <entry key="S30" value="21.81873721873903" />
+      <entry key="S60" value="34.0523121132498" />
+      <entry key="M2" value="44.21879563215348" />
+      <entry key="M5" value="61.33566114360987" />
+      <entry key="M10" value="87.08773843507251" />
+      <entry key="M15" value="123.95314481568357" />
+      <entry key="M30" value="286.0824629985103" />
+      <entry key="H1" value="585.3585789727623" />
+      <entry key="H2" value="913.3416944852197" />
+      <entry key="H4" value="1167.15514974978" />
+      <entry key="D1" value="1455.8949699733141" />
+      <entry key="W1" value="1518.0252284248716" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -159,7 +160,7 @@
       <workItem from="1792159635957" duration="6650000" />
       <workItem from="1792274222548" duration="1865000" />
       <workItem from="1792349402044" duration="16550000" />
-      <workItem from="1792442406902" duration="2934000" />
+      <workItem from="1792442406902" duration="3838000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -417,7 +418,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792444687033</updated>
     </task>
-    <option name="localTasksCounter" value="33" />
+    <task id="LOCAL-00033" summary="Improve mobile layout for task items and bump version to 1.6.7">
+      <option name="closed" value="true" />
+      <created>1792445504994</created>
+      <option name="number" value="00033" />
+      <option name="presentableId" value="LOCAL-00033" />
+      <option name="project" value="LOCAL" />
+      <updated>1792445504994</updated>
+    </task>
+    <option name="localTasksCounter" value="34" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -435,7 +444,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Add GitHub Actions workflow for building Android APK" />
     <MESSAGE value="Test" />
     <MESSAGE value="Enable manual workflow dispatch trigger in GitHub Actions" />
     <MESSAGE value="Add auto-update system, improve database sync handling, and enhance GitHub Actions for APK release." />
@@ -460,7 +468,8 @@
     <MESSAGE value="Enhance OTA update mechanism with SSL context fallback, progress callbacks, and dynamic module reloading; bump version to 1.6.4." />
     <MESSAGE value="Enhance OTA update mechanism with dynamic module reloading, fallback logic, and multi-location compatibility; add UI restart button; bump version to 1.6.4." />
     <MESSAGE value="Add editing and deletion support for tasks and subtasks; bump version to 1.6.6" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add editing and deletion support for tasks and subtasks; bump version to 1.6.6" />
+    <MESSAGE value="Improve mobile layout for task items and bump version to 1.6.7" />
+    <option name="LAST_COMMIT_MESSAGE" value="Improve mobile layout for task items and bump version to 1.6.7" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

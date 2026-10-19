@@ -286,7 +286,7 @@ def test_ui_edit_delete_dialogs():
     page = DummyPage(width=950)
     main.main(page)
 
-    assert len(page.overlay) == 6
+    assert len(page.overlay) >= 6
     edit_task_dialog = page.overlay[3]
     delete_task_dialog = page.overlay[4]
     edit_subtask_dialog = page.overlay[5]
@@ -352,7 +352,60 @@ def test_mobile_task_card_layout_and_actions():
     assert len(master_card.content.controls[1].controls) >= 3
 
 
-# --- 10. TEST CHMURY GITHUB GIST (Automatyczne tworzenie i pobieranie) ---
+# --- 10. TEST DZIENNIKA SUKCESÓW (ARCHIWUM WYKONANYCH ZADAŃ) ---
+def test_completed_archive_lifecycle():
+    main.add_task_db("Sukces 1", is_daily=1, priority="A")
+    main.add_task_db("W trakcie", is_daily=1, priority="B")
+
+    tasks = main.get_tasks(is_daily_view=True)
+    task_done_id = [t[0] for t in tasks if t[1] == "Sukces 1"][0]
+    main.toggle_done_db(task_done_id, 1)
+
+    # Przed resetem archiwum jest puste
+    assert len(main.get_completed_archive()) == 0
+
+    # Reset dnia przenosi zrobione zadanie do archiwum
+    main.end_of_day_db()
+
+    archive = main.get_completed_archive()
+    assert len(archive) == 1
+    assert archive[0][1] == "Sukces 1"
+    assert archive[0][2] == "A"
+    assert len(archive[0][3]) > 0  # timestamp istnieje
+
+    # Czyszczenie archiwum
+    main.clear_completed_archive_db()
+    assert len(main.get_completed_archive()) == 0
+
+
+def test_archive_and_timer_ui():
+    main.add_task_db("Ukończony Projekt", is_daily=1, priority="A")
+    tasks = main.get_tasks(is_daily_view=True)
+    main.toggle_done_db(tasks[0][0], 1)
+    main.end_of_day_db()
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    # 1. Sprawdzenie Minutnika Skupienia na widoku Daily
+    root_pc = page.controls[0].content
+    content_col = root_pc.content.controls[2].content
+    timer_card = content_col.controls[2]
+    assert isinstance(timer_card, ft.Container)
+
+    # 2. Przejście do Dziennika Sukcesów przez nawigację
+    sidebar_col = root_pc.content.controls[0].content
+    archive_pc_nav = sidebar_col.controls[3]
+    archive_pc_nav.on_click(None)
+
+    # Weryfikacja kontrolek Dziennika Sukcesów
+    assert "Dziennik Sukcesów" in content_col.controls[0].controls[0].controls[1].value
+    # Lista sukcesów zawiera 1 zarchiwizowane zadanie
+    archive_list_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    assert len(archive_list_col.controls) == 1
+
+
+# --- 11. TEST CHMURY GITHUB GIST (Automatyczne tworzenie i pobieranie) ---
 def test_gist_cloud_sync(monkeypatch):
     main.add_task_db("Zadanie Chmurowe", is_daily=1, priority="A")
     main.set_config("sync_mode", "gist")

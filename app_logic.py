@@ -14,7 +14,7 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.7"
+FALLBACK_VERSION = "1.6.8"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
@@ -296,6 +296,15 @@ def init_db():
             pass
         conn.execute(
             "CREATE TABLE IF NOT EXISTS routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, is_done INTEGER DEFAULT 0)")
+        conn.execute("""
+                     CREATE TABLE IF NOT EXISTS completed_archive
+                     (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         title TEXT NOT NULL,
+                         priority TEXT DEFAULT 'B',
+                         completed_at TEXT NOT NULL
+                     )
+                     """)
 
 
 def get_tasks(is_daily_view=True):
@@ -407,8 +416,29 @@ def edit_subtask_title_db(task_id, subtask_idx, new_title):
     push_database_async()
 
 
+def get_completed_archive(limit=100):
+    with sqlite3.connect(LOCAL_DB) as conn:
+        return conn.execute(
+            "SELECT id, title, priority, completed_at FROM completed_archive ORDER BY id DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+
+
+def clear_completed_archive_db():
+    with sqlite3.connect(LOCAL_DB) as conn:
+        conn.execute("DELETE FROM completed_archive")
+    push_database_async()
+
+
 def end_of_day_db():
     with sqlite3.connect(LOCAL_DB) as conn:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        done_tasks = conn.execute("SELECT title, priority FROM tasks WHERE is_done = 1").fetchall()
+        for dt in done_tasks:
+            conn.execute(
+                "INSERT INTO completed_archive (title, priority, completed_at) VALUES (?, ?, ?)",
+                (dt[0], dt[1], now_str)
+            )
         conn.execute("DELETE FROM tasks WHERE is_done = 1")
         conn.execute("UPDATE tasks SET is_daily = 0 WHERE is_daily = 1 AND is_done = 0")
         conn.execute("UPDATE routines SET is_done = 0")
@@ -485,6 +515,96 @@ def main(page: ft.Page):
     status_text = ft.Text("", size=12, color=ft.Colors.GREEN_400)
     warning_text = ft.Text("", size=12, color=ft.Colors.RED_400)
     title_text = ft.Text("Daily", size=22, weight=ft.FontWeight.BOLD)
+
+    # --- MINUTNIK SKUPIENIA (Zasada 5 minut / Pomodoro) ---
+    timer_total_seconds = 300
+    timer_seconds_left = 300
+    timer_running = False
+    timer_message = ""
+    timer_lock = threading.Lock()
+
+    timer_text = ft.Text("05:00", size=22, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY)
+    timer_progress = ft.ProgressBar(value=1.0, color=COLOR_PRIO_B, bgcolor="#21262d", height=4)
+    timer_msg_text = ft.Text("⚡ Zasada 5 minut: przełam paraliż startu!", size=11, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500)
+    timer_btn_play = ft.IconButton(
+        icon=ft.Icons.PLAY_ARROW_ROUNDED,
+        icon_size=24,
+        icon_color=COLOR_SUCCESS,
+        tooltip="Uruchom minutnik",
+        on_click=lambda e: toggle_timer()
+    )
+
+    def update_timer_ui():
+        mins = timer_seconds_left // 60
+        secs = timer_seconds_left % 60
+        timer_text.value = f"{mins:02d}:{secs:02d}"
+        timer_progress.value = (timer_seconds_left / timer_total_seconds) if timer_total_seconds > 0 else 0.0
+        timer_btn_play.icon = ft.Icons.PAUSE_ROUNDED if timer_running else ft.Icons.PLAY_ARROW_ROUNDED
+        timer_btn_play.icon_color = COLOR_PRIO_B if timer_running else COLOR_SUCCESS
+        timer_btn_play.tooltip = "Pauza" if timer_running else "Start"
+        if timer_message:
+            timer_msg_text.value = timer_message
+            timer_msg_text.color = COLOR_SUCCESS
+        else:
+            if timer_total_seconds == 300:
+                timer_msg_text.value = "⚡ Zasada 5 minut: zrób tylko 5 min!"
+            elif timer_total_seconds == 900:
+                timer_msg_text.value = "🎯 15 minut: krótki, intensywny sprint"
+            else:
+                timer_msg_text.value = "🔥 25 minut: głębokie skupienie (Pomodoro)"
+            timer_msg_text.color = COLOR_TEXT_SECONDARY
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def timer_worker():
+        nonlocal timer_running, timer_seconds_left, timer_message
+        while True:
+            with timer_lock:
+                if not timer_running or timer_seconds_left <= 0:
+                    break
+                timer_seconds_left -= 1
+                done = (timer_seconds_left == 0)
+
+            update_timer_ui()
+
+            if done:
+                with timer_lock:
+                    timer_running = False
+                    timer_message = "🎉 Brawo! Czas minął – paraliż pokonany!"
+                update_timer_ui()
+                break
+
+            time.sleep(1)
+
+    def toggle_timer():
+        nonlocal timer_running, timer_message
+        with timer_lock:
+            timer_running = not timer_running
+            timer_message = ""
+            start_thread = timer_running
+        update_timer_ui()
+        if start_thread:
+            threading.Thread(target=timer_worker, daemon=True).start()
+
+    def reset_timer():
+        nonlocal timer_running, timer_seconds_left, timer_message
+        with timer_lock:
+            timer_running = False
+            timer_seconds_left = timer_total_seconds
+            timer_message = ""
+        update_timer_ui()
+
+    def set_timer_preset(seconds):
+        nonlocal timer_running, timer_total_seconds, timer_seconds_left, timer_message
+        with timer_lock:
+            timer_running = False
+            timer_total_seconds = seconds
+            timer_seconds_left = seconds
+            timer_message = ""
+        update_timer_ui()
+        refresh_view()
 
     gist_token_input = ft.TextField(label="Token GitHub (uprawnienie 'gist')", value=get_config("gist_token", ""),
                                     password=True, can_reveal_password=True)
@@ -807,12 +927,32 @@ def main(page: ft.Page):
             warning_text.value = ""
             refresh_view()
 
-    def close_dialogs():
-        quick_dialog.open = master_dialog.open = subtask_dialog.open = False
-        edit_task_dialog.open = delete_task_dialog.open = edit_subtask_dialog.open = False
+    clear_archive_dialog = ft.AlertDialog(
+        title=ft.Text("🗑️ Wyczyścić Dziennik Sukcesów?"),
+        content=ft.Text("Czy na pewno chcesz bezpowrotnie usunąć całą historię ukończonych zadań?"),
+        actions=[
+            ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
+            ft.Button("Wyczyść", bgcolor="#ef444422", color=COLOR_PRIO_A, on_click=lambda e: confirm_clear_archive())
+        ]
+    )
+
+    def open_clear_archive_dialog(e=None):
+        clear_archive_dialog.open = True
         page.update()
 
-    page.overlay.extend([quick_dialog, master_dialog, subtask_dialog, edit_task_dialog, delete_task_dialog, edit_subtask_dialog])
+    def confirm_clear_archive():
+        clear_completed_archive_db()
+        clear_archive_dialog.open = False
+        status_text.value = "✓ Wyczyszczono historię sukcesów"
+        warning_text.value = ""
+        refresh_view()
+
+    def close_dialogs():
+        quick_dialog.open = master_dialog.open = subtask_dialog.open = False
+        edit_task_dialog.open = delete_task_dialog.open = edit_subtask_dialog.open = clear_archive_dialog.open = False
+        page.update()
+
+    page.overlay.extend([quick_dialog, master_dialog, subtask_dialog, edit_task_dialog, delete_task_dialog, edit_subtask_dialog, clear_archive_dialog])
 
     def open_quick_modal(e):
         quick_dump_field.value = ""
@@ -889,6 +1029,7 @@ def main(page: ft.Page):
     daily_pc_box = create_pc_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily", daily_count_badge)
     master_pc_box = create_pc_nav(ft.Icons.LIST_ALT, "Master", "master", master_count_badge)
     settings_pc_box = create_pc_nav(ft.Icons.SETTINGS_OUTLINED, "Ustawienia", "settings")
+    archive_pc_box = create_pc_nav(ft.Icons.EMOJI_EVENTS_OUTLINED, "Sukcesy", "archive")
 
     daily_pc_target = ft.DragTarget(group="tasks", content=daily_pc_box,
                                     on_will_accept=lambda e: highlight_nav(daily_pc_box, True),
@@ -906,7 +1047,7 @@ def main(page: ft.Page):
         if count_text_ctrl:
             label_row.append(count_text_ctrl)
         return ft.Container(
-            padding=ft.Padding.symmetric(vertical=8, horizontal=16),
+            padding=ft.Padding.symmetric(vertical=6, horizontal=10),
             border_radius=10,
             on_click=lambda e, v=view: switch_view(v),
             content=ft.Column([
@@ -918,6 +1059,7 @@ def main(page: ft.Page):
     daily_mob_box = create_mob_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily", daily_mob_count_text)
     master_mob_box = create_mob_nav(ft.Icons.LIST_ALT, "Master", "master", master_mob_count_text)
     settings_mob_box = create_mob_nav(ft.Icons.SETTINGS_OUTLINED, "Opcje", "settings")
+    archive_mob_box = create_mob_nav(ft.Icons.EMOJI_EVENTS_OUTLINED, "Sukcesy", "archive")
 
     daily_mob_target = ft.DragTarget(group="tasks", content=daily_mob_box,
                                      on_will_accept=lambda e: highlight_nav(daily_mob_box, True),
@@ -956,6 +1098,7 @@ def main(page: ft.Page):
             ),
             daily_pc_target,
             master_pc_target,
+            archive_pc_box,
             ft.Container(expand=True),
             version_badge,
             sync_badge,
@@ -966,9 +1109,9 @@ def main(page: ft.Page):
 
     bottom_nav = ft.Container(
         bgcolor=COLOR_BG_CARD,
-        padding=ft.Padding.symmetric(vertical=4, horizontal=10),
+        padding=ft.Padding.symmetric(vertical=4, horizontal=6),
         border=ft.Border(top=ft.BorderSide(1, COLOR_BG_BORDER)),
-        content=ft.Row([daily_mob_target, master_mob_target, settings_mob_box],
+        content=ft.Row([daily_mob_target, master_mob_target, settings_mob_box, archive_mob_box],
                        alignment=ft.MainAxisAlignment.SPACE_AROUND)
     )
 
@@ -1026,12 +1169,12 @@ def main(page: ft.Page):
         daily_mob_count_text.value = f"({len(daily_all)})" if daily_all else ""
         master_mob_count_text.value = f"({len(master_all)})" if master_all else ""
 
-        for box, v in ((daily_pc_box, "daily"), (master_pc_box, "master"), (settings_pc_box, "settings")):
+        for box, v in ((daily_pc_box, "daily"), (master_pc_box, "master"), (settings_pc_box, "settings"), (archive_pc_box, "archive")):
             is_active = (current_view == v)
             box.bgcolor = COLOR_BG_SURFACE if is_active else None
-            box.border = ft.Border(left=ft.BorderSide(3, COLOR_PRIO_B if v == "daily" else COLOR_PRIO_C if v == "master" else COLOR_TEXT_PRIMARY)) if is_active else None
+            box.border = ft.Border(left=ft.BorderSide(3, COLOR_PRIO_B if v in ("daily", "archive") else COLOR_PRIO_C if v == "master" else COLOR_TEXT_PRIMARY)) if is_active else None
 
-        for box, v in ((daily_mob_box, "daily"), (master_mob_box, "master"), (settings_mob_box, "settings")):
+        for box, v in ((daily_mob_box, "daily"), (master_mob_box, "master"), (settings_mob_box, "settings"), (archive_mob_box, "archive")):
             is_active = (current_view == v)
             box.bgcolor = COLOR_BG_SURFACE if is_active else None
 
@@ -1162,6 +1305,84 @@ def main(page: ft.Page):
                 card_limits,
                 card_gist,
                 card_other_sync
+            ]
+            page.update()
+            return
+
+        if current_view == "archive":
+            title_text.value = "Dziennik Sukcesów"
+            archive_items = get_completed_archive(limit=100)
+            archive_cards = []
+
+            for item in archive_items:
+                aid, atitle, aprio, adate = item[0], item[1], item[2], item[3]
+                prio_bg = COLOR_PRIO_A if aprio == "A" else COLOR_PRIO_B if aprio == "B" else COLOR_PRIO_C
+                archive_cards.append(
+                    ft.Container(
+                        bgcolor=COLOR_BG_CARD,
+                        border=ft.Border.all(1, COLOR_BG_BORDER),
+                        border_radius=10,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        content=ft.Row([
+                            ft.Container(
+                                content=ft.Text(aprio, size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                bgcolor=prio_bg,
+                                width=24,
+                                height=24,
+                                border_radius=6,
+                                alignment=ft.Alignment(0, 0)
+                            ),
+                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=18, color=COLOR_SUCCESS),
+                            ft.Text(
+                                atitle,
+                                size=13,
+                                weight=ft.FontWeight.W_500,
+                                color=COLOR_TEXT_PRIMARY,
+                                expand=True
+                            ),
+                            ft.Text(adate, size=11, color=COLOR_TEXT_SECONDARY)
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
+                    )
+                )
+
+            empty_placeholder = ft.Container(
+                padding=ft.Padding.all(30),
+                alignment=ft.Alignment(0, 0),
+                content=ft.Column([
+                    ft.Icon(ft.Icons.EMOJI_EVENTS_OUTLINED, size=50, color=COLOR_TEXT_SECONDARY),
+                    ft.Text("Brak zarchiwizowanych sukcesów", size=16, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY),
+                    ft.Text(
+                        "Gdy wykonasz zadania i zresetujesz dzień (Koniec dnia), Twoje osiągnięcia zostaną zapisane tutaj zamiast bezpowrotnie znikać!",
+                        size=12, color=COLOR_TEXT_SECONDARY, text_align=ft.TextAlign.CENTER
+                    )
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
+            )
+
+            clear_btn = ft.TextButton(
+                "Wyczyść archiwum",
+                icon=ft.Icons.DELETE_SWEEP,
+                style=ft.ButtonStyle(color=COLOR_PRIO_A),
+                on_click=open_clear_archive_dialog
+            ) if archive_items else ft.Container()
+
+            content_column.controls = [
+                ft.Row([
+                    ft.Row([
+                        ft.Icon(ft.Icons.EMOJI_EVENTS_ROUNDED, size=24, color=COLOR_PRIO_B),
+                        ft.Text("Dziennik Sukcesów", size=20, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY)
+                    ], spacing=8),
+                    ft.Container(expand=True),
+                    clear_btn
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                status_text, warning_text,
+                ft.Container(
+                    content=ft.Text(f"🏆 Łącznie ukończonych zadań w archiwum: {len(archive_items)}", size=13, weight=ft.FontWeight.W_500, color=COLOR_PRIO_B),
+                    bgcolor="#f59e0b16",
+                    border=ft.Border.all(1, "#f59e0b33"),
+                    border_radius=8,
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=8)
+                ) if archive_items else ft.Container(),
+                ft.Column(archive_cards if archive_items else [empty_placeholder], spacing=6)
             ]
             page.update()
             return
@@ -1680,11 +1901,70 @@ def main(page: ft.Page):
                             color=COLOR_TEXT_PRIMARY)
                 ], spacing=8),
                 ft.Container(expand=True),
+                ft.IconButton(ft.Icons.EMOJI_EVENTS_ROUNDED, icon_color=COLOR_PRIO_B, tooltip="Dziennik Sukcesów", on_click=lambda e: switch_view("archive")),
                 ft.IconButton(ft.Icons.SYNC, icon_color=COLOR_TEXT_SECONDARY, tooltip="Synchronizuj bazę", on_click=manual_sync),
             ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             quick_bar
         ]
         if is_daily_mode:
+            preset_5 = ft.Container(
+                content=ft.Text("5 min", size=11, weight=ft.FontWeight.BOLD,
+                                color=COLOR_TEXT_PRIMARY if timer_total_seconds == 300 else COLOR_TEXT_SECONDARY),
+                bgcolor="#f59e0b33" if timer_total_seconds == 300 else "#21262d",
+                border_radius=6,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                on_click=lambda e: set_timer_preset(300)
+            )
+            preset_15 = ft.Container(
+                content=ft.Text("15 min", size=11, weight=ft.FontWeight.BOLD,
+                                color=COLOR_TEXT_PRIMARY if timer_total_seconds == 900 else COLOR_TEXT_SECONDARY),
+                bgcolor="#f59e0b33" if timer_total_seconds == 900 else "#21262d",
+                border_radius=6,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                on_click=lambda e: set_timer_preset(900)
+            )
+            preset_25 = ft.Container(
+                content=ft.Text("25 min", size=11, weight=ft.FontWeight.BOLD,
+                                color=COLOR_TEXT_PRIMARY if timer_total_seconds == 1500 else COLOR_TEXT_SECONDARY),
+                bgcolor="#f59e0b33" if timer_total_seconds == 1500 else "#21262d",
+                border_radius=6,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                on_click=lambda e: set_timer_preset(1500)
+            )
+
+            timer_card = ft.Container(
+                bgcolor=COLOR_BG_CARD,
+                border=ft.Border.all(1, COLOR_BG_BORDER),
+                border_radius=12,
+                padding=12,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Row([
+                            ft.Icon(ft.Icons.TIMER_OUTLINED, size=16, color=COLOR_PRIO_B),
+                            ft.Text("Minutnik Skupienia", size=13, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY),
+                        ], spacing=6),
+                        ft.Container(expand=True),
+                        preset_5,
+                        preset_15,
+                        preset_25
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                    ft.Row([
+                        timer_text,
+                        timer_msg_text,
+                        ft.Container(expand=True),
+                        timer_btn_play,
+                        ft.IconButton(
+                            icon=ft.Icons.REPLAY_ROUNDED,
+                            icon_size=20,
+                            icon_color=COLOR_TEXT_SECONDARY,
+                            tooltip="Reset minutnika",
+                            on_click=lambda e: reset_timer()
+                        )
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                    timer_progress
+                ], spacing=6)
+            )
+            elements.append(timer_card)
             progress_card = ft.Container(
                 bgcolor=COLOR_BG_CARD,
                 border=ft.Border.all(1, COLOR_BG_BORDER),
