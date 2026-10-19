@@ -10,7 +10,7 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.1"
+FALLBACK_VERSION = "1.6.3"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
@@ -1001,13 +1001,6 @@ def main(page: ft.Page):
                         icon_color=COLOR_PRIO_B,
                         tooltip="Zapisz do Master listy",
                         on_click=save_inline_input
-                    ),
-                    ft.IconButton(
-                        icon=ft.Icons.OPEN_IN_NEW,
-                        icon_size=18,
-                        icon_color=COLOR_TEXT_SECONDARY,
-                        tooltip="Otwórz okno szybkiego zrzutu",
-                        on_click=open_quick_modal
                     )
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
             )
@@ -1023,15 +1016,8 @@ def main(page: ft.Page):
                     ft.IconButton(
                         icon=ft.Icons.ADD_CIRCLE,
                         icon_color=COLOR_PRIO_C,
-                        tooltip="Dodaj zadanie",
+                        tooltip="Dodaj zadanie do Master listy",
                         on_click=save_inline_input
-                    ),
-                    ft.IconButton(
-                        icon=ft.Icons.ADD_BOX,
-                        icon_size=20,
-                        icon_color=COLOR_PRIO_C,
-                        tooltip="Otwórz formularz z wyborem priorytetu",
-                        on_click=open_master_modal
                     )
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
             )
