@@ -10,7 +10,7 @@ import urllib.request
 from datetime import datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.0"
+FALLBACK_VERSION = "1.6.1"
 
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---

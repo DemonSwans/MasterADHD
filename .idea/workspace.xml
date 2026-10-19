@@ -4,9 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Update workflows, app logic, and database behavior; introduce async sync, improve UI handling, and bump version to 1.6.0">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Enhance OTA module with detailed error handling and logging, refine update mechanism, and bump version to 1.6.1.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/version.txt" beforeDir="false" afterPath="$PROJECT_DIR$/version.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -52,23 +53,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.2031719643134715" />
-      <entry key="MS500" value="3.0180423631239894" />
-      <entry key="S2" value="6.832878741202807" />
-      <entry key="S5" value="14.898119141721674" />
-      <entry key="S10" value="26.224891897727872" />
-      <entry key="S30" value="44.816953198010076" />
-      <entry key="S60" value="57.57490762905887" />
-      <entry key="M2" value="76.5058205684925" />
-      <entry key="M5" value="102.4755245736917" />
-      <entry key="M10" value="116.19329714276665" />
-      <entry key="M15" value="121.60531670732519" />
-      <entry key="M30" value="127.5219993446603" />
-      <entry key="H1" value="130.75028709264043" />
-      <entry key="H2" value="132.70017113166872" />
-      <entry key="H4" value="134.482575051644" />
-      <entry key="D1" value="144.01802172280074" />
-      <entry key="W1" value="149.75237270912854" />
+      <entry key="MS100" value="1.4159907399911615" />
+      <entry key="MS500" value="3.305155690038705" />
+      <entry key="S2" value="11.576277865441456" />
+      <entry key="S5" value="26.645474778703328" />
+      <entry key="S10" value="40.61128977662967" />
+      <entry key="S30" value="59.815470011184026" />
+      <entry key="S60" value="72.06466777832703" />
+      <entry key="M2" value="84.03945842653226" />
+      <entry key="M5" value="116.48780415457004" />
+      <entry key="M10" value="171.69034851683563" />
+      <entry key="M15" value="209.5063888773951" />
+      <entry key="M30" value="266.16813110397754" />
+      <entry key="H1" value="304.64325096362876" />
+      <entry key="H2" value="327.3820257448818" />
+      <entry key="H4" value="340.44700432034205" />
+      <entry key="D1" value="359.88516653409494" />
+      <entry key="W1" value="367.43918344874646" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -90,23 +91,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.1678432442128632" />
-      <entry key="MS500" value="2.9978697272579655" />
-      <entry key="S2" value="6.821486586797684" />
-      <entry key="S5" value="14.887657290451772" />
-      <entry key="S10" value="26.21528951450733" />
-      <entry key="S30" value="44.811032865519806" />
-      <entry key="S60" value="57.57090380239151" />
-      <entry key="M2" value="76.50311998800026" />
-      <entry key="M5" value="102.47408630207327" />
-      <entry key="M10" value="116.19248605761645" />
-      <entry key="M15" value="121.60475201473125" />
-      <entry key="M30" value="127.52170395293467" />
-      <entry key="H1" value="130.75013581619015" />
-      <entry key="H2" value="132.700094290324" />
-      <entry key="H4" value="134.4825352994749" />
-      <entry key="D1" value="144.01801249162747" />
-      <entry key="W1" value="149.75237114749598" />
+      <entry key="MS100" value="1.3788831149900826" />
+      <entry key="MS500" value="3.284155202054005" />
+      <entry key="S2" value="11.557035030482538" />
+      <entry key="S5" value="26.627705972621538" />
+      <entry key="S10" value="40.59770803381085" />
+      <entry key="S30" value="59.80879734300314" />
+      <entry key="S60" value="72.06066606558574" />
+      <entry key="M2" value="84.03713438749881" />
+      <entry key="M5" value="116.48649140264108" />
+      <entry key="M10" value="171.68934708353336" />
+      <entry key="M15" value="209.50556105744502" />
+      <entry key="M30" value="266.16759623889527" />
+      <entry key="H1" value="304.6429422289793" />
+      <entry key="H2" value="327.3818590277882" />
+      <entry key="H4" value="340.4469166390104" />
+      <entry key="D1" value="359.88514888368104" />
+      <entry key="W1" value="367.43918067039414" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -157,7 +158,7 @@
       <updated>1792105691165</updated>
       <workItem from="1792159635957" duration="6650000" />
       <workItem from="1792274222548" duration="1865000" />
-      <workItem from="1792349402044" duration="9614000" />
+      <workItem from="1792349402044" duration="10910000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -343,7 +344,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792418485551</updated>
     </task>
-    <option name="localTasksCounter" value="24" />
+    <task id="LOCAL-00024" summary="Enhance OTA module with detailed error handling and logging, refine update mechanism, and bump version to 1.6.1.">
+      <option name="closed" value="true" />
+      <created>1792419507471</created>
+      <option name="number" value="00024" />
+      <option name="presentableId" value="LOCAL-00024" />
+      <option name="project" value="LOCAL" />
+      <updated>1792419507471</updated>
+    </task>
+    <option name="localTasksCounter" value="25" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -380,11 +389,12 @@
     <MESSAGE value="Update version to 1.5.0" />
     <MESSAGE value="Update to version 1.5.0: Enhance APK build with project-specific metadata, introduce asynchronous database syncing, refine UI elements for mobile, and improve local database performance." />
     <MESSAGE value="Update workflows, app logic, and database behavior; introduce async sync, improve UI handling, and bump version to 1.6.0" />
-    <option name="LAST_COMMIT_MESSAGE" value="Update workflows, app logic, and database behavior; introduce async sync, improve UI handling, and bump version to 1.6.0" />
+    <MESSAGE value="Enhance OTA module with detailed error handling and logging, refine update mechanism, and bump version to 1.6.1." />
+    <option name="LAST_COMMIT_MESSAGE" value="Enhance OTA module with detailed error handling and logging, refine update mechanism, and bump version to 1.6.1." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792419245900" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792420660019" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/MasterADHD$test_app.coverage" NAME="test_app Coverage Results" MODIFIED="1792167685655" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/MasterADHD$generate_icon.coverage" NAME="generate_icon Coverage Results" MODIFIED="1792418367596" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>

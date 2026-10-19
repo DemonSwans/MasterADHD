@@ -36,9 +36,21 @@ def get_installed_ota_version() -> str:
     if os.path.exists(OTA_VERSION_FILE):
         try:
             with open(OTA_VERSION_FILE, "r", encoding="utf-8") as f:
-                return f.read().strip()
+                val = f.read().strip()
+                if val:
+                    return val
         except Exception as e:
             print(f"[OTA] Błąd odczytu pliku wersji OTA ({OTA_VERSION_FILE}): {e}")
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        ver_file = os.path.join(base_dir, "version.txt")
+        if os.path.exists(ver_file):
+            with open(ver_file, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    return val
+    except Exception as e:
+        print(f"[OTA] Błąd odczytu pliku version.txt: {e}")
     try:
         import app_logic
         return getattr(app_logic, "FALLBACK_VERSION", "0.0.0")
@@ -105,13 +117,23 @@ def load_and_run(page: ft.Page):
             app_logic.main(page)
 
         if updated:
-            page.overlay.append(
-                ft.SnackBar(
-                    ft.Text(f"🚀 Zaktualizowano w tle do wersji v{new_ver}!"),
-                    open=True,
-                    bgcolor=ft.Colors.GREEN_800
-                )
+            snack = ft.SnackBar(
+                ft.Text(f"🚀 Zaktualizowano w tle do wersji v{new_ver}!"),
+                open=True,
+                bgcolor=ft.Colors.GREEN_800
             )
+            page.overlay.append(snack)
+            if hasattr(page, "open"):
+                try:
+                    page.open(snack)
+                except Exception:
+                    pass
+            elif hasattr(page, "snack_bar"):
+                try:
+                    page.snack_bar = snack
+                    page.snack_bar.open = True
+                except Exception:
+                    pass
             page.update()
 
     except Exception as e:
