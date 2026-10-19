@@ -10,6 +10,7 @@ import flet as ft
 
 LOCAL_DB = "tasks.db"
 CONFIG_DB = "app_config.db"
+FALLBACK_VERSION = "1.3.0"  # GitHub Actions automatycznie podmienia tę wartość z pliku version.txt!
 
 
 # --- ODCZYT WERSJI Z PLIKU ---
@@ -19,10 +20,12 @@ def get_local_version():
         ver_file = os.path.join(base_dir, "version.txt")
         if os.path.exists(ver_file):
             with open(ver_file, "r", encoding="utf-8") as f:
-                return f.read().strip()
+                val = f.read().strip()
+                if val:
+                    return val
     except Exception:
         pass
-    return "1.3.0"
+    return FALLBACK_VERSION
 
 
 APP_VERSION = get_local_version()
@@ -54,36 +57,37 @@ def set_config(key, value):
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
 
 
-# --- SYSTEM AKTUALIZACJI ---
+# --- SYSTEM AKTUALIZACJI (Tylko gałąź master) ---
 def check_for_updates(page: ft.Page):
-    ts = datetime.now().timestamp()
-    urls = [
-        f"https://raw.githubusercontent.com/DemonSwans/MasterADHD/main/version.txt?t={ts}",
-        f"https://raw.githubusercontent.com/DemonSwans/MasterADHD/master/version.txt?t={ts}"
-    ]
+    ts = int(datetime.now().timestamp())
+    url = f"https://raw.githubusercontent.com/DemonSwans/MasterADHD/master/version.txt?t={ts}"
 
-    for url in urls:
-        try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=4) as resp:
-                if resp.status == 200:
-                    remote_version = resp.read().decode("utf-8").strip()
-                    if is_newer_version(remote_version, APP_VERSION):
-                        show_update_dialog(page, remote_version)
-                    return
-        except urllib.error.HTTPError:
-            continue
-        except Exception:
-            return
-
-    page.overlay.append(
-        ft.SnackBar(
-            ft.Text("⚠️ Błąd 404: Brak pliku 'version.txt' na GitHubie!"),
-            open=True,
-            bgcolor=ft.Colors.RED_800
+    try:
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache"
+            }
         )
-    )
-    page.update()
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            if resp.status == 200:
+                remote_version = resp.read().decode("utf-8").strip()
+                if is_newer_version(remote_version, APP_VERSION):
+                    show_update_dialog(page, remote_version)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            page.overlay.append(
+                ft.SnackBar(
+                    ft.Text("⚠️ Błąd 404: Nie znaleziono pliku 'version.txt' na gałęzi master!"),
+                    open=True,
+                    bgcolor=ft.Colors.RED_800
+                )
+            )
+            page.update()
+    except Exception:
+        pass
 
 
 def show_update_dialog(page: ft.Page, new_version: str):
@@ -97,9 +101,9 @@ def show_update_dialog(page: ft.Page, new_version: str):
     dialog = ft.AlertDialog(
         title=ft.Text("🚀 Dostępna nowa wersja!"),
         content=ft.Text(
-            f"Twoja wersja: v{APP_VERSION}\n"
-            f"Nowa wersja: v{new_version}\n\n"
-            f"Kliknij 'Aktualizuj', aby pobrać i zainstalować nową paczkę."
+            f"Twoja zainstalowana wersja: v{APP_VERSION}\n"
+            f"Wersja na GitHubie (master): v{new_version}\n\n"
+            f"Kliknij 'Aktualizuj', aby pobrać nową paczkę."
         ),
         actions=[
             ft.TextButton("Później", on_click=close_dialog),
@@ -876,6 +880,7 @@ def main(page: ft.Page):
     page.on_resize = lambda e: refresh_view()
     page.add(ft.SafeArea(content=root_layout, expand=True))
     refresh_view()
+
 
 if __name__ == "__main__":
     ft.run(main)

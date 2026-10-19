@@ -2,7 +2,7 @@ name: Zbuduj i Opublikuj APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ master ]
   workflow_dispatch:
 
 jobs:
@@ -30,10 +30,15 @@ jobs:
         run: |
           pip install flet pytest
 
+      - name: Wstrzyknij wersję z version.txt prosto do main.py
+        run: |
+          VER=$(cat version.txt | tr -d '[:space:]')
+          sed -i "s/FALLBACK_VERSION = \".*\"/FALLBACK_VERSION = \"$VER\"/g" main.py
+
       - name: Uruchom testy (pytest)
         run: pytest test_app.py -v
 
-      - name: Budowanie APK (Tylko 64-bit dla nowoczesnych telefonów)
+      - name: Budowanie APK (64-bit)
         run: yes | flet build apk --arch arm64-v8a
 
       - name: Zmień nazwę na stałą
@@ -44,4 +49,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release delete latest --cleanup-tag -y || true
-          gh release create latest MasterADHD.apk -t "Najnowsza Wersja" -n "Paczka stworzona automatycznie z GitHuba."
+          gh release create latest MasterADHD.apk -t "Najnowsza Wersja" -n "Paczka stworzona automatycznie z gałęzi master."
