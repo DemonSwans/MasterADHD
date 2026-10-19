@@ -403,6 +403,18 @@ def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=N
     return done_points / total_points
 
 
+# --- PALETA KOLORYSTYCZNA (Dark Slate UI) ---
+COLOR_BG_MAIN = "#0d1117"
+COLOR_BG_CARD = "#161b22"
+COLOR_BG_SURFACE = "#21262d"
+COLOR_BG_BORDER = "#30363d"
+COLOR_PRIO_A = "#ef4444"
+COLOR_PRIO_B = "#f59e0b"
+COLOR_PRIO_C = "#3b82f6"
+COLOR_SUCCESS = "#10b981"
+COLOR_TEXT_PRIMARY = "#f0f6fc"
+COLOR_TEXT_SECONDARY = "#8b949e"
+
 # --- INTERFEJS (Flet) ---
 def main(page: ft.Page):
     current_ver = get_local_version()
@@ -410,7 +422,7 @@ def main(page: ft.Page):
     page.window.width = 950
     page.window.height = 760
     page.padding = 0
-    page.bgcolor = "#111318"
+    page.bgcolor = COLOR_BG_MAIN
     page.theme_mode = ft.ThemeMode.DARK
     init_db()
 
@@ -424,7 +436,7 @@ def main(page: ft.Page):
         w = getattr(page, "width", None) or getattr(page.window, "width", 950) or 950
         return w < 650
 
-    priority_colors = {"A": ft.Colors.RED_500, "B": ft.Colors.AMBER_700, "C": ft.Colors.BLUE_500}
+    priority_colors = {"A": COLOR_PRIO_A, "B": COLOR_PRIO_B, "C": COLOR_PRIO_C}
 
     tasks_column = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=8)
     routines_row = ft.Row(wrap=True, spacing=8)
@@ -469,6 +481,33 @@ def main(page: ft.Page):
         status_text.value = f"✓ {msg}" if ok else ""
         warning_text.value = "" if ok else f"⚠️ {msg}"
         refresh_view()
+
+    # --- SZYBKIE WPROWADZANIE (Inline Quick Input) ---
+    inline_input_field = ft.TextField(
+        hint_text="⚡ Błyskawiczny zrzut myśli (Enter aby zapisać)...",
+        expand=True,
+        dense=True,
+        bgcolor=COLOR_BG_CARD,
+        border_color=COLOR_BG_BORDER,
+        focused_border_color=COLOR_PRIO_B,
+        text_size=13,
+        content_padding=ft.Padding.symmetric(horizontal=12, vertical=8)
+    )
+
+    def save_inline_input(e=None):
+        val = inline_input_field.value.strip()
+        if not val:
+            return
+        if current_view == "daily":
+            add_task_db(val, is_daily=False, priority="B")
+            status_text.value = "✓ Zapisano myśl w Master liście"
+        else:
+            add_task_db(val, is_daily=False, priority="B")
+            status_text.value = "✓ Dodano zadanie"
+        inline_input_field.value = ""
+        refresh_view()
+
+    inline_input_field.on_submit = save_inline_input
 
     # --- OKIENKA DIALOGOWE ---
     quick_dump_field = ft.TextField(hint_text="Myśl do Master listy...", autofocus=True,
@@ -600,15 +639,30 @@ def main(page: ft.Page):
         refresh_view()
 
     def highlight_nav(box, is_hover, default_border=None):
-        box.border = ft.Border.all(2, ft.Colors.AMBER_400) if is_hover else default_border
+        box.border = ft.Border.all(2, COLOR_PRIO_B) if is_hover else default_border
         page.update()
 
-    def create_pc_nav(icon, label, view):
-        return ft.Container(padding=10, border_radius=8, on_click=lambda e: switch_view(view),
-                            content=ft.Row([ft.Icon(icon, size=20), ft.Text(label, size=15)], spacing=12))
+    daily_count_text = ft.Text("0", size=11, color=COLOR_TEXT_PRIMARY, weight=ft.FontWeight.BOLD)
+    master_count_text = ft.Text("0", size=11, color=COLOR_TEXT_PRIMARY, weight=ft.FontWeight.BOLD)
+    daily_count_badge = ft.Container(content=daily_count_text, bgcolor=COLOR_BG_SURFACE, padding=ft.Padding.symmetric(horizontal=8, vertical=2), border_radius=10)
+    master_count_badge = ft.Container(content=master_count_text, bgcolor=COLOR_BG_SURFACE, padding=ft.Padding.symmetric(horizontal=8, vertical=2), border_radius=10)
 
-    daily_pc_box = create_pc_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily")
-    master_pc_box = create_pc_nav(ft.Icons.LIST_ALT, "Master", "master")
+    daily_mob_count_text = ft.Text("", size=10, color=COLOR_PRIO_B, weight=ft.FontWeight.BOLD)
+    master_mob_count_text = ft.Text("", size=10, color=COLOR_PRIO_C, weight=ft.FontWeight.BOLD)
+
+    def create_pc_nav(icon, label, view, badge=None):
+        row_items = [ft.Icon(icon, size=18, color=COLOR_TEXT_PRIMARY), ft.Text(label, size=14, weight=ft.FontWeight.W_500, color=COLOR_TEXT_PRIMARY)]
+        if badge:
+            row_items.extend([ft.Container(expand=True), badge])
+        return ft.Container(
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+            border_radius=8,
+            on_click=lambda e, v=view: switch_view(v),
+            content=ft.Row(row_items, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
+        )
+
+    daily_pc_box = create_pc_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily", daily_count_badge)
+    master_pc_box = create_pc_nav(ft.Icons.LIST_ALT, "Master", "master", master_count_badge)
     settings_pc_box = create_pc_nav(ft.Icons.SETTINGS_OUTLINED, "Ustawienia", "settings")
 
     daily_pc_target = ft.DragTarget(group="tasks", content=daily_pc_box,
@@ -622,17 +676,22 @@ def main(page: ft.Page):
                                      on_accept=lambda e: (highlight_nav(master_pc_box, False),
                                                           move_task_between_lists(resolve_dragged_task_id(e), 0)))
 
-    def create_mob_nav(icon, label, view):
+    def create_mob_nav(icon, label, view, count_text_ctrl=None):
+        label_row = [ft.Text(label, size=11, weight=ft.FontWeight.W_500)]
+        if count_text_ctrl:
+            label_row.append(count_text_ctrl)
         return ft.Container(
-            padding=ft.Padding.symmetric(vertical=8, horizontal=20),
+            padding=ft.Padding.symmetric(vertical=8, horizontal=16),
             border_radius=10,
-            on_click=lambda e: switch_view(view),
-            content=ft.Column([ft.Icon(icon, size=22), ft.Text(label, size=11)], alignment=ft.MainAxisAlignment.CENTER,
-                              horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2, tight=True)
+            on_click=lambda e, v=view: switch_view(v),
+            content=ft.Column([
+                ft.Icon(icon, size=20),
+                ft.Row(label_row, spacing=3, alignment=ft.MainAxisAlignment.CENTER, tight=True)
+            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2, tight=True)
         )
 
-    daily_mob_box = create_mob_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily")
-    master_mob_box = create_mob_nav(ft.Icons.LIST_ALT, "Master", "master")
+    daily_mob_box = create_mob_nav(ft.Icons.WB_SUNNY_OUTLINED, "Daily", "daily", daily_mob_count_text)
+    master_mob_box = create_mob_nav(ft.Icons.LIST_ALT, "Master", "master", master_mob_count_text)
     settings_mob_box = create_mob_nav(ft.Icons.SETTINGS_OUTLINED, "Opcje", "settings")
 
     daily_mob_target = ft.DragTarget(group="tasks", content=daily_mob_box,
@@ -646,26 +705,44 @@ def main(page: ft.Page):
                                       on_accept=lambda e: (highlight_nav(master_mob_box, False),
                                                            move_task_between_lists(resolve_dragged_task_id(e), 0)))
 
-    version_badge = ft.Text(f"⚡ OTA v{current_ver}", size=11, color=ft.Colors.GREEN_400, weight=ft.FontWeight.BOLD)
-    sync_badge = ft.Text("", size=11, color=ft.Colors.GREY_500)
+    version_badge = ft.Container(
+        content=ft.Row([
+            ft.Icon(ft.Icons.BOLT, size=13, color=COLOR_SUCCESS),
+            ft.Text(f"OTA v{current_ver}", size=11, color=COLOR_SUCCESS, weight=ft.FontWeight.BOLD)
+        ], spacing=4, tight=True),
+        bgcolor="#10b9811c", padding=ft.Padding.symmetric(horizontal=8, vertical=4), border_radius=6
+    )
+    sync_badge_text = ft.Text("", size=11, color=COLOR_TEXT_SECONDARY)
+    sync_badge_icon = ft.Icon(ft.Icons.STORAGE, size=13, color=COLOR_TEXT_SECONDARY)
+    sync_badge = ft.Container(
+        content=ft.Row([sync_badge_icon, sync_badge_text], spacing=4, tight=True),
+        bgcolor=COLOR_BG_SURFACE, padding=ft.Padding.symmetric(horizontal=8, vertical=4), border_radius=6
+    )
 
     sidebar = ft.Container(
-        width=200, bgcolor="#16181d", padding=15,
+        width=210, bgcolor=COLOR_BG_CARD, padding=12,
         content=ft.Column([
-            ft.Text("Nawigacja", size=12, color=ft.Colors.GREY_500),
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.TASK_ALT, size=20, color=COLOR_PRIO_B),
+                    ft.Text("Master ADHD", size=14, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY)
+                ], spacing=8),
+                padding=ft.Padding.only(bottom=8, left=4)
+            ),
             daily_pc_target,
             master_pc_target,
             ft.Container(expand=True),
             version_badge,
             sync_badge,
-            ft.Divider(height=1, color=ft.Colors.GREY_800),
+            ft.Divider(height=1, color=COLOR_BG_BORDER),
             settings_pc_box
-        ], expand=True, spacing=6)
+        ], expand=True, spacing=4)
     )
 
     bottom_nav = ft.Container(
-        bgcolor="#16181d",
-        padding=ft.Padding.symmetric(vertical=6, horizontal=10),
+        bgcolor=COLOR_BG_CARD,
+        padding=ft.Padding.symmetric(vertical=4, horizontal=10),
+        border=ft.Border(top=ft.BorderSide(1, COLOR_BG_BORDER)),
         content=ft.Row([daily_mob_target, master_mob_target, settings_mob_box],
                        alignment=ft.MainAxisAlignment.SPACE_AROUND)
     )
@@ -717,23 +794,43 @@ def main(page: ft.Page):
         mob = is_mobile()
         content_area.padding = 14 if mob else 25
 
-        for box, v in ((daily_pc_box, "daily"), (master_pc_box, "master"), (settings_pc_box, "settings"),
-                       (daily_mob_box, "daily"), (master_mob_box, "master"), (settings_mob_box, "settings")):
-            box.bgcolor = ft.Colors.GREY_800 if current_view == v else None
+        daily_all = get_tasks(is_daily_view=True)
+        master_all = get_tasks(is_daily_view=False)
+        daily_count_text.value = str(len(daily_all))
+        master_count_text.value = str(len(master_all))
+        daily_mob_count_text.value = f"({len(daily_all)})" if daily_all else ""
+        master_mob_count_text.value = f"({len(master_all)})" if master_all else ""
+
+        for box, v in ((daily_pc_box, "daily"), (master_pc_box, "master"), (settings_pc_box, "settings")):
+            is_active = (current_view == v)
+            box.bgcolor = COLOR_BG_SURFACE if is_active else None
+            box.border = ft.Border(left=ft.BorderSide(3, COLOR_PRIO_B if v == "daily" else COLOR_PRIO_C if v == "master" else COLOR_TEXT_PRIMARY)) if is_active else None
+
+        for box, v in ((daily_mob_box, "daily"), (master_mob_box, "master"), (settings_mob_box, "settings")):
+            is_active = (current_view == v)
+            box.bgcolor = COLOR_BG_SURFACE if is_active else None
 
         mode = get_config("sync_mode", "none")
         if mode == "gist":
-            sync_badge.value = "☁️ Sync: Chmura"
-            sync_badge.color = ft.Colors.CYAN_400
+            sync_badge_text.value = "Chmura Gist"
+            sync_badge_text.color = ft.Colors.CYAN_400
+            sync_badge_icon.name = ft.Icons.CLOUD_DONE
+            sync_badge_icon.color = ft.Colors.CYAN_400
         elif mode == "ha_server":
-            sync_badge.value = "🏠 Sync: Serwer HA"
-            sync_badge.color = ft.Colors.GREEN_400
+            sync_badge_text.value = "Serwer HA"
+            sync_badge_text.color = COLOR_SUCCESS
+            sync_badge_icon.name = ft.Icons.HOME_ROUNDED
+            sync_badge_icon.color = COLOR_SUCCESS
         elif mode == "folder":
-            sync_badge.value = "📁 Sync: Dysk"
-            sync_badge.color = ft.Colors.BLUE_400
+            sync_badge_text.value = "Dysk lokalny"
+            sync_badge_text.color = COLOR_PRIO_C
+            sync_badge_icon.name = ft.Icons.FOLDER_SPECIAL
+            sync_badge_icon.color = COLOR_PRIO_C
         else:
-            sync_badge.value = "💾 Tryb lokalny"
-            sync_badge.color = ft.Colors.GREY_500
+            sync_badge_text.value = "Tryb lokalny"
+            sync_badge_text.color = COLOR_TEXT_SECONDARY
+            sync_badge_icon.name = ft.Icons.STORAGE
+            sync_badge_icon.color = COLOR_TEXT_SECONDARY
 
         if mob:
             root_layout.content = ft.Column([content_area, ft.Divider(height=1, color=ft.Colors.GREY_800), bottom_nav],
@@ -748,38 +845,80 @@ def main(page: ft.Page):
         if current_view == "settings":
             title_text.value = f"Ustawienia (v{current_ver})"
             rout_db = get_routines()
-            rout_list = ft.Column([ft.Row([ft.Text(r[1], expand=True), ft.IconButton(icon=ft.Icons.DELETE, icon_size=18,
-                                                                                     on_click=lambda e, rid=r[0]: (
-                                                                                         delete_routine_db(rid),
-                                                                                         refresh_view()))]) for r in
-                                   rout_db])
+            rout_list = ft.Column([
+                ft.Container(
+                    bgcolor=COLOR_BG_SURFACE, padding=ft.Padding.symmetric(horizontal=12, vertical=8), border_radius=8,
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=16, color=COLOR_SUCCESS),
+                        ft.Text(r[1], expand=True, size=13, color=COLOR_TEXT_PRIMARY),
+                        ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=18, icon_color=COLOR_PRIO_A, tooltip="Usuń rutynę",
+                                      on_click=lambda e, rid=r[0]: (delete_routine_db(rid), refresh_view()))
+                    ])
+                ) for r in rout_db
+            ], spacing=6)
+
+            card_routines = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Text("Nawyki i Rutyny (Nie obciążają limitu A)", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY),
+                    ft.Row([
+                        routine_input,
+                        ft.Button("Dodaj", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                                  on_click=lambda e: (add_routine_db(routine_input.value.strip()),
+                                                      setattr(routine_input, 'value', ''),
+                                                      refresh_view()))
+                    ]),
+                    rout_list if rout_db else ft.Text("Brak zdefiniowanych rutyn", size=12, color=COLOR_TEXT_SECONDARY)
+                ], spacing=10)
+            )
+
+            card_limits = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Text("Limit kluczowych zadań 'A' na Daily:", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY),
+                    ft.Text("Ograniczenie liczby zadań najwyższego priorytetu pomaga utrzymać koncentrację (ADHD Focus).", size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Row([
+                        ft.Button("3 zadania (Zalecane)", bgcolor=COLOR_PRIO_B if max_a_limit == 3 else COLOR_BG_SURFACE,
+                                  color=COLOR_TEXT_PRIMARY, on_click=lambda e: update_max_a(3)),
+                        ft.Button("4 zadania", bgcolor=COLOR_PRIO_B if max_a_limit == 4 else COLOR_BG_SURFACE,
+                                  color=COLOR_TEXT_PRIMARY, on_click=lambda e: update_max_a(4)),
+                    ], spacing=10)
+                ], spacing=8)
+            )
+
+            card_gist = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.CLOUD, size=18, color=ft.Colors.CYAN_400),
+                        ft.Text("Chmura (GitHub Gist - bezpłatna synchronizacja)", weight=ft.FontWeight.BOLD, size=14, color=ft.Colors.CYAN_400)
+                    ], spacing=8),
+                    gist_token_input,
+                    gist_id_input,
+                    ft.Button("Włącz Chmurę Gist", bgcolor=ft.Colors.CYAN_800, color=COLOR_TEXT_PRIMARY,
+                              on_click=lambda e: change_sync_mode("gist"))
+                ], spacing=10)
+            )
+
+            card_other_sync = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Text("Inne opcje synchronizacji:", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY),
+                    ha_url_input,
+                    ft.Button("Włącz Home Assistant (HA)", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=lambda e: change_sync_mode("ha_server")),
+                    folder_input,
+                    ft.Button("Włącz synchronizację z folderem (Dysk PC)", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=lambda e: change_sync_mode("folder")),
+                    ft.Button("Tylko lokalnie (Brak synchronizacji)", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_SECONDARY, on_click=lambda e: change_sync_mode("none"))
+                ], spacing=8)
+            )
+
             content_column.controls = [
                 ft.Row([title_text, ft.Container(expand=True), sync_badge if mob else ft.Container()]),
-                status_text, warning_text, ft.Divider(height=15),
-                ft.Text("Nawyki i Rutyny (Nie obciążają limitu A)", weight=ft.FontWeight.BOLD),
-                ft.Row([routine_input, ft.Button("Dodaj",
-                                                 on_click=lambda e: (add_routine_db(routine_input.value.strip()),
-                                                                     setattr(routine_input, 'value', ''),
-                                                                     refresh_view()))]),
-                rout_list, ft.Divider(height=15),
-                ft.Text("Maks. zadań 'A' na Daily:"),
-                ft.Row([
-                    ft.Button("3", bgcolor=ft.Colors.AMBER_700 if max_a_limit == 3 else ft.Colors.GREY_800,
-                              color=ft.Colors.WHITE, on_click=lambda e: update_max_a(3)),
-                    ft.Button("4", bgcolor=ft.Colors.AMBER_700 if max_a_limit == 4 else ft.Colors.GREY_800,
-                              color=ft.Colors.WHITE, on_click=lambda e: update_max_a(4)),
-                ]), ft.Divider(height=20),
-                ft.Text("☁️ Chmura (GitHub Gist - dla każdego bez serwera)", weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.CYAN_400),
-                gist_token_input,
-                gist_id_input,
-                ft.Button("Włącz Chmurę", bgcolor=ft.Colors.CYAN_800, color=ft.Colors.WHITE,
-                          on_click=lambda e: change_sync_mode("gist")),
-                ft.Divider(height=15),
-                ft.Text("Pozostałe opcje synchronizacji:", weight=ft.FontWeight.BOLD),
-                ha_url_input, ft.Button("Włącz HA", on_click=lambda e: change_sync_mode("ha_server")),
-                folder_input, ft.Button("Włącz Dysk (Tylko PC)", on_click=lambda e: change_sync_mode("folder")),
-                ft.Button("Tylko lokalnie", on_click=lambda e: change_sync_mode("none")),
+                status_text, warning_text,
+                card_routines,
+                card_limits,
+                card_gist,
+                card_other_sync
             ]
             page.update()
             return
@@ -792,44 +931,126 @@ def main(page: ft.Page):
         if is_daily_mode:
             prog_val = calculate_progress_logic(all_view_tasks, all_routines, active_subtask_idx_map)
             progress_bar.value = prog_val
-            progress_text.value = f"Postęp dnia: {int(prog_val * 100)}%"
+            progress_bar.color = COLOR_SUCCESS
+            progress_bar.bgcolor = COLOR_BG_SURFACE
+            progress_text.value = f"{int(prog_val * 100)}% ukończone"
+            progress_text.color = COLOR_SUCCESS if prog_val >= 1.0 else COLOR_TEXT_PRIMARY
+            progress_text.weight = ft.FontWeight.BOLD
+
             for r in all_routines:
+                is_r_done = bool(r[2])
                 routines_row.controls.append(
-                    ft.Container(bgcolor=ft.Colors.GREEN_800 if r[2] else ft.Colors.GREY_800, padding=8,
-                                 border_radius=15,
-                                 on_click=lambda e, rid=r[0], cdone=r[2]: (toggle_routine_db(rid, not cdone),
-                                                                           refresh_view()), content=ft.Row(
-                            [ft.Icon(ft.Icons.CHECK_CIRCLE if r[2] else ft.Icons.RADIO_BUTTON_UNCHECKED, size=16),
-                             ft.Text(r[1], size=13,
-                                     style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH) if r[2] else None)],
-                            spacing=6, tight=True)))
+                    ft.Container(
+                        bgcolor="#10b98122" if is_r_done else COLOR_BG_SURFACE,
+                        border=ft.Border.all(1, COLOR_SUCCESS if is_r_done else COLOR_BG_BORDER),
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                        border_radius=14,
+                        on_click=lambda e, rid=r[0], cdone=r[2]: (toggle_routine_db(rid, not cdone), refresh_view()),
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.CHECK_CIRCLE if is_r_done else ft.Icons.RADIO_BUTTON_UNCHECKED, size=15,
+                                    color=COLOR_SUCCESS if is_r_done else COLOR_TEXT_SECONDARY),
+                            ft.Text(r[1], size=12, color=COLOR_TEXT_PRIMARY if is_r_done else COLOR_TEXT_SECONDARY,
+                                    weight=ft.FontWeight.W_500,
+                                    style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_r_done else None))
+                        ], spacing=6, tight=True)
+                    )
+                )
+
+        if is_daily_mode:
+            inline_input_field.hint_text = "⚡ Zapisz myśl do Master listy (Enter)..."
+            quick_bar = ft.Container(
+                bgcolor=COLOR_BG_CARD,
+                border=ft.Border.all(1, COLOR_BG_BORDER),
+                border_radius=12,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                content=ft.Row([
+                    inline_input_field,
+                    ft.IconButton(
+                        icon=ft.Icons.ADD_CIRCLE,
+                        icon_color=COLOR_PRIO_B,
+                        tooltip="Zapisz do Master listy",
+                        on_click=save_inline_input
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.OPEN_IN_NEW,
+                        icon_size=18,
+                        icon_color=COLOR_TEXT_SECONDARY,
+                        tooltip="Otwórz okno szybkiego zrzutu",
+                        on_click=open_quick_modal
+                    )
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            )
+        else:
+            inline_input_field.hint_text = "➕ Nowe zadanie do Master listy (Enter)..."
+            quick_bar = ft.Container(
+                bgcolor=COLOR_BG_CARD,
+                border=ft.Border.all(1, COLOR_BG_BORDER),
+                border_radius=12,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                content=ft.Row([
+                    inline_input_field,
+                    ft.IconButton(
+                        icon=ft.Icons.ADD_CIRCLE,
+                        icon_color=COLOR_PRIO_C,
+                        tooltip="Dodaj zadanie",
+                        on_click=save_inline_input
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.ADD_BOX,
+                        icon_size=20,
+                        icon_color=COLOR_PRIO_C,
+                        tooltip="Otwórz formularz z wyborem priorytetu",
+                        on_click=open_master_modal
+                    )
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            )
 
         for task_id, title, is_daily, is_done, priority, subtasks in all_view_tasks:
             prio = priority if priority in ("A", "B", "C") else "B"
+            card_border_color = COLOR_BG_BORDER if not is_done else "#21262d"
 
             prio_items = [ft.Container(
-                content=ft.Row([ft.Text(prio, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=14)],
-                               alignment=ft.MainAxisAlignment.CENTER), width=36, height=34, border_radius=6,
-                bgcolor=priority_colors[prio] if not is_done else ft.Colors.GREY_700,
-                on_click=lambda e, tid=task_id: toggle_prio_menu(tid))]
+                content=ft.Row([ft.Text(prio, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=13)],
+                               alignment=ft.MainAxisAlignment.CENTER),
+                width=32, height=30, border_radius=8,
+                bgcolor=priority_colors[prio] if not is_done else COLOR_BG_BORDER,
+                tooltip=f"Priorytet {prio} (Kliknij, aby zmienić)",
+                on_click=lambda e, tid=task_id: toggle_prio_menu(tid)
+            )]
             if open_prio_task_id == task_id:
                 for other_p in ("A", "B", "C"):
-                    if other_p != prio: prio_items.append(ft.Container(
-                        content=ft.Row([ft.Text(other_p, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=13)],
-                                       alignment=ft.MainAxisAlignment.CENTER), width=36, height=30,
-                        bgcolor=priority_colors[other_p], border_radius=6,
-                        on_click=lambda e, tid=task_id, np=other_p, idm=is_daily_mode: change_priority(tid, np, idm)))
+                    if other_p != prio:
+                        prio_items.append(ft.Container(
+                            content=ft.Row([ft.Text(other_p, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=12)],
+                                           alignment=ft.MainAxisAlignment.CENTER),
+                            width=32, height=26, border_radius=6,
+                            bgcolor=priority_colors[other_p],
+                            tooltip=f"Zmień na {other_p}",
+                            on_click=lambda e, tid=task_id, np=other_p, idm=is_daily_mode: change_priority(tid, np, idm)
+                        ))
 
-            # Szerszy, wygodniejszy uchwyt na telefonie (36px)
-            handle_w = 34 if mob else 28
+            # Ergonomiczny uchwyt przeciągania
+            handle_w = 34 if mob else 30
             drag_handle = ft.Draggable(
                 group="tasks",
                 data=str(task_id),
-                content=ft.Container(width=handle_w, height=38, bgcolor="#2a2e38", border_radius=6),
-                content_when_dragging=ft.Container(width=handle_w, height=38, bgcolor="#2a2e38", border_radius=6,
-                                                   opacity=0.3),
-                content_feedback=ft.Container(padding=10, bgcolor=ft.Colors.GREY_800, border_radius=8,
-                                              content=ft.Text(title, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
+                content=ft.Container(
+                    content=ft.Icon(ft.Icons.DRAG_INDICATOR, size=18, color=COLOR_TEXT_SECONDARY),
+                    width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8,
+                    alignment=ft.Alignment.CENTER,
+                    tooltip="Przeciągnij zadanie"
+                ),
+                content_when_dragging=ft.Container(
+                    width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8, opacity=0.3
+                ),
+                content_feedback=ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                    bgcolor=COLOR_BG_CARD,
+                    border=ft.Border.all(1, COLOR_PRIO_B),
+                    border_radius=10,
+                    shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.BLACK_54),
+                    content=ft.Text(title, color=COLOR_TEXT_PRIMARY, weight=ft.FontWeight.BOLD, size=14)
+                ),
                 on_drag_start=lambda e, tid=task_id: set_active_drag(tid)
             )
 
@@ -847,25 +1068,42 @@ def main(page: ft.Page):
 
                     idx = active_subtask_idx_map[task_id]
                     current_st = subtasks[idx]
+                    step_done = bool(current_st["is_done"])
+
+                    step_badge = ft.Container(
+                        content=ft.Text(f"{idx + 1}/{len(subtasks)}", size=10, color=COLOR_PRIO_C, weight=ft.FontWeight.BOLD),
+                        bgcolor="#3b82f622", padding=ft.Padding.symmetric(horizontal=6, vertical=2), border_radius=6
+                    )
 
                     row_controls = [
-                        ft.Column(prio_items, spacing=4, tight=True),
-                        ft.Checkbox(
-                            label=current_st["title"],
-                            value=bool(current_st["is_done"]),
-                            expand=True,
-                            on_change=lambda e, tid=task_id, s_idx=idx, s_list=subtasks: handle_task_check(tid,
-                                                                                                           e.control.value,
-                                                                                                           s_idx,
-                                                                                                           s_list)
-                        )
+                        ft.Column(prio_items, spacing=3, tight=True),
+                        ft.Column([
+                            ft.Row([
+                                ft.Text(title, size=12, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500),
+                                step_badge
+                            ], spacing=6, tight=True),
+                            ft.Checkbox(
+                                label=current_st["title"],
+                                value=step_done,
+                                active_color=COLOR_SUCCESS,
+                                label_style=ft.TextStyle(
+                                    size=14,
+                                    weight=ft.FontWeight.W_500,
+                                    color=COLOR_TEXT_SECONDARY if step_done else COLOR_TEXT_PRIMARY,
+                                    decoration=ft.TextDecoration.LINE_THROUGH if step_done else None
+                                ),
+                                on_change=lambda e, tid=task_id, s_idx=idx, s_list=subtasks: handle_task_check(
+                                    tid, e.control.value, s_idx, s_list
+                                )
+                            )
+                        ], spacing=1, expand=True)
                     ]
 
                     if current_st["is_done"] == 1 and idx < len(subtasks) - 1:
                         row_controls.append(
                             ft.IconButton(
                                 icon=ft.Icons.ARROW_FORWARD,
-                                icon_color=ft.Colors.GREEN_400,
+                                icon_color=COLOR_SUCCESS,
                                 tooltip="Kolejny krok",
                                 on_click=lambda e, tid=task_id: next_subtask(tid)
                             )
@@ -874,88 +1112,205 @@ def main(page: ft.Page):
                     row_controls.append(drag_handle)
 
                     task_content = ft.Container(
-                        bgcolor="#1e2128", padding=10, border_radius=8,
-                        content=ft.Row(controls=row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                        bgcolor=COLOR_BG_CARD,
+                        border=ft.Border.all(1, card_border_color),
+                        border_radius=12,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        content=ft.Row(controls=row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
                     )
                 else:
+                    task_done = bool(is_done)
                     task_content = ft.Container(
-                        bgcolor="#1e2128", padding=10, border_radius=8,
+                        bgcolor=COLOR_BG_CARD,
+                        border=ft.Border.all(1, card_border_color),
+                        border_radius=12,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
                         content=ft.Row(
                             controls=[
-                                ft.Column(prio_items, spacing=4, tight=True),
-                                ft.Checkbox(label=title, value=bool(is_done), expand=True,
-                                            on_change=lambda e, tid=task_id: handle_task_check(tid, e.control.value,
-                                                                                               None, subtasks)),
+                                ft.Column(prio_items, spacing=3, tight=True),
+                                ft.Checkbox(
+                                    label=title,
+                                    value=task_done,
+                                    active_color=COLOR_SUCCESS,
+                                    expand=True,
+                                    label_style=ft.TextStyle(
+                                        size=14,
+                                        weight=ft.FontWeight.W_500,
+                                        color=COLOR_TEXT_SECONDARY if task_done else COLOR_TEXT_PRIMARY,
+                                        decoration=ft.TextDecoration.LINE_THROUGH if task_done else None
+                                    ),
+                                    on_change=lambda e, tid=task_id: handle_task_check(
+                                        tid, e.control.value, None, subtasks
+                                    )
+                                ),
                                 drag_handle
                             ],
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=10
                         )
                     )
             else:
+                task_done = bool(is_done)
                 title_row_controls = [
-                    ft.Column(prio_items, spacing=4, tight=True),
-                    ft.Checkbox(label=title, value=bool(is_done), expand=True,
-                                on_change=lambda e, tid=task_id: handle_task_check(tid, e.control.value, None,
-                                                                                   subtasks)),
+                    ft.Column(prio_items, spacing=3, tight=True),
+                    ft.Checkbox(
+                        label=title,
+                        value=task_done,
+                        active_color=COLOR_SUCCESS,
+                        expand=True,
+                        label_style=ft.TextStyle(
+                            size=14,
+                            weight=ft.FontWeight.W_500,
+                            color=COLOR_TEXT_SECONDARY if task_done else COLOR_TEXT_PRIMARY,
+                            decoration=ft.TextDecoration.LINE_THROUGH if task_done else None
+                        ),
+                        on_change=lambda e, tid=task_id: handle_task_check(
+                            tid, e.control.value, None, subtasks
+                        )
+                    ),
                 ]
 
                 if is_daily:
-                    title_row_controls.append(ft.Icon(ft.Icons.WB_SUNNY, size=18, color=ft.Colors.AMBER_400,
-                                                      tooltip="Zadanie jest na liście Daily"))
+                    title_row_controls.append(
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.WB_SUNNY, size=13, color=COLOR_PRIO_B),
+                                ft.Text("Daily", size=11, color=COLOR_PRIO_B, weight=ft.FontWeight.BOLD)
+                            ], spacing=4, tight=True),
+                            bgcolor="#f59e0b22",
+                            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                            border_radius=6,
+                            tooltip="Zadanie jest na liście Daily"
+                        )
+                    )
 
                 if mob:
                     title_row_controls.append(
-                        ft.IconButton(icon=ft.Icons.ADD, icon_size=20, tooltip="Dodaj krok",
-                                      on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs))
+                        ft.IconButton(
+                            icon=ft.Icons.ADD_TASK,
+                            icon_size=18,
+                            icon_color=COLOR_PRIO_C,
+                            tooltip="Dodaj krok do planu",
+                            on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
+                        )
                     )
                 else:
                     title_row_controls.append(
-                        ft.TextButton("👣 Dodaj krok", icon=ft.Icons.ADD,
-                                      on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs))
+                        ft.TextButton(
+                            "👣 Krok",
+                            icon=ft.Icons.ADD,
+                            style=ft.ButtonStyle(color=COLOR_PRIO_C),
+                            on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
+                        )
                     )
                 title_row_controls.append(drag_handle)
 
                 subtask_controls = []
                 for idx, st in enumerate(subtasks):
-                    subtask_controls.append(ft.Row(controls=[ft.Container(width=36),
-                                                             ft.Checkbox(label=st["title"], value=bool(st["is_done"]),
-                                                                         expand=True, label_style=ft.TextStyle(size=13,
-                                                                                                               color=ft.Colors.GREY_300),
-                                                                         on_change=lambda e, tid=task_id, subs=subtasks,
-                                                                                          i=idx: handle_task_check(tid,
-                                                                                                                   e.control.value,
-                                                                                                                   i,
-                                                                                                                   subs))]))
+                    st_done = bool(st["is_done"])
+                    subtask_controls.append(
+                        ft.Container(
+                            padding=ft.Padding.only(left=36, top=2, bottom=2),
+                            content=ft.Row(
+                                controls=[
+                                    ft.Checkbox(
+                                        label=st["title"],
+                                        value=st_done,
+                                        active_color=COLOR_SUCCESS,
+                                        expand=True,
+                                        label_style=ft.TextStyle(
+                                            size=13,
+                                            color=COLOR_TEXT_SECONDARY if st_done else COLOR_TEXT_PRIMARY,
+                                            decoration=ft.TextDecoration.LINE_THROUGH if st_done else None
+                                        ),
+                                        on_change=lambda e, tid=task_id, subs=subtasks, i=idx: handle_task_check(
+                                            tid, e.control.value, i, subs
+                                        )
+                                    )
+                                ]
+                            )
+                        )
+                    )
 
                 task_content = ft.Container(
-                    bgcolor="#1e2128", padding=10, border_radius=8,
-                    content=ft.Column([
-                                          ft.Row(title_row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-                                      ] + subtask_controls, spacing=2)
+                    bgcolor=COLOR_BG_CARD,
+                    border=ft.Border.all(1, card_border_color),
+                    border_radius=12,
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                    content=ft.Column(
+                        [ft.Row(title_row_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)] + subtask_controls,
+                        spacing=2
+                    )
                 )
 
             tasks_column.controls.append(task_content)
 
+        elements = [
+            ft.Row([
+                ft.Row([
+                    ft.Icon(ft.Icons.WB_SUNNY if is_daily_mode else ft.Icons.ALL_INBOX_ROUNDED, size=22,
+                            color=COLOR_PRIO_B if is_daily_mode else COLOR_PRIO_C),
+                    ft.Text("Daily" if is_daily_mode else "Master Lista", size=20, weight=ft.FontWeight.BOLD,
+                            color=COLOR_TEXT_PRIMARY)
+                ], spacing=8),
+                ft.Container(expand=True),
+                ft.IconButton(ft.Icons.SYNC, icon_color=COLOR_TEXT_SECONDARY, tooltip="Synchronizuj bazę", on_click=manual_sync),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            quick_bar
+        ]
         if is_daily_mode:
-            top_right_button = ft.Button("⚡ Myśl" if mob else "⚡ Szybka myśl", bgcolor=ft.Colors.GREY_800,
-                                         color=ft.Colors.WHITE, on_click=open_quick_modal)
-        else:
-            top_right_button = ft.Button("➕ Dodaj" if mob else "➕ Dodaj Projekt / Zadanie", bgcolor=ft.Colors.GREY_800,
-                                         color=ft.Colors.WHITE, on_click=open_master_modal)
+            progress_card = ft.Container(
+                bgcolor=COLOR_BG_CARD,
+                border=ft.Border.all(1, COLOR_BG_BORDER),
+                border_radius=12,
+                padding=12,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Row([
+                            ft.Icon(ft.Icons.TRENDING_UP_ROUNDED, size=16, color=COLOR_SUCCESS),
+                            ft.Text("Postęp dnia", size=13, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY),
+                        ], spacing=6),
+                        ft.Container(expand=True),
+                        ft.Container(
+                            content=progress_text,
+                            bgcolor="#10b98122",
+                            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+                            border_radius=8
+                        )
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    progress_bar,
+                ], spacing=8)
+            )
+            elements.append(progress_card)
+            if all_routines:
+                elements.append(
+                    ft.Container(
+                        bgcolor=COLOR_BG_CARD,
+                        border=ft.Border.all(1, COLOR_BG_BORDER),
+                        border_radius=12,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        content=ft.Column([
+                            ft.Text("Nawyki i Rutyny:", size=12, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_SECONDARY),
+                            routines_row
+                        ], spacing=8)
+                    )
+                )
 
-        elements = [ft.Row([title_text, ft.Container(expand=True),
-                            ft.IconButton(ft.Icons.SYNC, tooltip="Pobierz z chmury", on_click=manual_sync),
-                            top_right_button])]
-        if is_daily_mode:
-            elements.extend([progress_bar, progress_text, ft.Divider(height=8)])
-            if all_routines: elements.extend(
-                [ft.Text("Nawyki i Rutyny:", size=13, weight=ft.FontWeight.BOLD), routines_row, ft.Divider(height=8)])
         elements.extend([status_text, warning_text, tasks_column])
         content_column.controls = elements
 
-        if is_daily_mode: content_column.controls.append(ft.Row(
-            [ft.Button("🌙 Koniec dnia (Reset)", bgcolor=ft.Colors.GREY_800, color=ft.Colors.WHITE,
-                       on_click=lambda e: (end_of_day_db(), refresh_view()))], alignment=ft.MainAxisAlignment.END))
+        if is_daily_mode:
+            content_column.controls.append(
+                ft.Row([
+                    ft.Button(
+                        "🌙 Koniec dnia (Reset)",
+                        icon=ft.Icons.NIGHTLIGHT_ROUND,
+                        bgcolor=COLOR_BG_SURFACE,
+                        color=COLOR_TEXT_PRIMARY,
+                        on_click=lambda e: (end_of_day_db(), refresh_view())
+                    )
+                ], alignment=ft.MainAxisAlignment.END)
+            )
 
         page.update()
 

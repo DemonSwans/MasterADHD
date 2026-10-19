@@ -286,5 +286,20 @@ def test_gist_cloud_sync(monkeypatch):
     assert "Chmury" in msg_pull
 
 
+# --- 11. TEST WIDOKU DARK SLATE I SZYBKIEGO WPROWADZANIA ---
+def test_dark_slate_ui_and_quick_input():
+    page = DummyPage(width=950)
+    main.main(page)
+
+    # Sprawdzenie koloru tła strony (Dark Slate)
+    assert page.bgcolor == "#0d1117"
+
+    # Dodanie zadania przez logikę bazy i odświeżenie
+    main.add_task_db("Nowa szybka myśl", is_daily=0, priority="B")
+    master_tasks = main.get_tasks(is_daily_view=False)
+    assert len(master_tasks) >= 1
+    assert master_tasks[0][1] == "Nowa szybka myśl"
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

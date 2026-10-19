@@ -4,11 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Enhance OTA module with detailed error handling and logging, refine update mechanism, and bump version to 1.6.1.">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Enhance OTA module with improved error handling, fallback logic, and refined update mechanism; bump version to 1.6.1.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/version.txt" beforeDir="false" afterPath="$PROJECT_DIR$/version.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -53,23 +52,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.4159907399911615" />
-      <entry key="MS500" value="3.305155690038705" />
-      <entry key="S2" value="11.576277865441456" />
-      <entry key="S5" value="26.645474778703328" />
-      <entry key="S10" value="40.61128977662967" />
-      <entry key="S30" value="59.815470011184026" />
-      <entry key="S60" value="72.06466777832703" />
-      <entry key="M2" value="84.03945842653226" />
-      <entry key="M5" value="116.48780415457004" />
-      <entry key="M10" value="171.69034851683563" />
-      <entry key="M15" value="209.5063888773951" />
-      <entry key="M30" value="266.16813110397754" />
-      <entry key="H1" value="304.64325096362876" />
-      <entry key="H2" value="327.3820257448818" />
-      <entry key="H4" value="340.44700432034205" />
-      <entry key="D1" value="359.88516653409494" />
-      <entry key="W1" value="367.43918344874646" />
+      <entry key="MS100" value="1.8602925037907778" />
+      <entry key="MS500" value="5.512952032198525" />
+      <entry key="S2" value="15.946267267259348" />
+      <entry key="S5" value="30.72126950199522" />
+      <entry key="S10" value="45.595193373667875" />
+      <entry key="S30" value="69.08978829162807" />
+      <entry key="S60" value="84.11258564439146" />
+      <entry key="M2" value="98.5261077312637" />
+      <entry key="M5" value="118.31682675761239" />
+      <entry key="M10" value="158.0059359533909" />
+      <entry key="M15" value="199.74116571051908" />
+      <entry key="M30" value="287.1970870838759" />
+      <entry key="H1" value="364.3663473889301" />
+      <entry key="H2" value="416.55250653073546" />
+      <entry key="H4" value="447.66570060076776" />
+      <entry key="D1" value="484.1354182149884" />
+      <entry key="W1" value="494.8901320913604" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -91,23 +90,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.3788831149900826" />
-      <entry key="MS500" value="3.284155202054005" />
-      <entry key="S2" value="11.557035030482538" />
-      <entry key="S5" value="26.627705972621538" />
-      <entry key="S10" value="40.59770803381085" />
-      <entry key="S30" value="59.80879734300314" />
-      <entry key="S60" value="72.06066606558574" />
-      <entry key="M2" value="84.03713438749881" />
-      <entry key="M5" value="116.48649140264108" />
-      <entry key="M10" value="171.68934708353336" />
-      <entry key="M15" value="209.50556105744502" />
-      <entry key="M30" value="266.16759623889527" />
-      <entry key="H1" value="304.6429422289793" />
-      <entry key="H2" value="327.3818590277882" />
-      <entry key="H4" value="340.4469166390104" />
-      <entry key="D1" value="359.88514888368104" />
-      <entry key="W1" value="367.43918067039414" />
+      <entry key="MS100" value="1.7942930289019945" />
+      <entry key="MS500" value="5.4742032558818" />
+      <entry key="S2" value="15.919433656734409" />
+      <entry key="S5" value="30.70071521043195" />
+      <entry key="S10" value="45.57986976203243" />
+      <entry key="S30" value="69.08198840464031" />
+      <entry key="S60" value="84.10783212870106" />
+      <entry key="M2" value="98.52332490999328" />
+      <entry key="M5" value="118.31548429816179" />
+      <entry key="M10" value="158.0050249514645" />
+      <entry key="M15" value="199.74038754181046" />
+      <entry key="M30" value="287.19651702020417" />
+      <entry key="H1" value="364.3659818612102" />
+      <entry key="H2" value="416.55229633358135" />
+      <entry key="H4" value="447.6655865740655" />
+      <entry key="D1" value="484.135395455145" />
+      <entry key="W1" value="494.8901285607743" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -158,7 +157,7 @@
       <updated>1792105691165</updated>
       <workItem from="1792159635957" duration="6650000" />
       <workItem from="1792274222548" duration="1865000" />
-      <workItem from="1792349402044" duration="10910000" />
+      <workItem from="1792349402044" duration="12666000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -352,7 +351,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792419507471</updated>
     </task>
-    <option name="localTasksCounter" value="25" />
+    <task id="LOCAL-00025" summary="Enhance OTA module with improved error handling, fallback logic, and refined update mechanism; bump version to 1.6.1.">
+      <option name="closed" value="true" />
+      <created>1792420698217</created>
+      <option name="number" value="00025" />
+      <option name="presentableId" value="LOCAL-00025" />
+      <option name="project" value="LOCAL" />
+      <updated>1792420698217</updated>
+    </task>
+    <option name="localTasksCounter" value="26" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -390,7 +397,8 @@
     <MESSAGE value="Update to version 1.5.0: Enhance APK build with project-specific metadata, introduce asynchronous database syncing, refine UI elements for mobile, and improve local database performance." />
     <MESSAGE value="Update workflows, app logic, and database behavior; introduce async sync, improve UI handling, and bump version to 1.6.0" />
     <MESSAGE value="Enhance OTA module with detailed error handling and logging, refine update mechanism, and bump version to 1.6.1." />
-    <option name="LAST_COMMIT_MESSAGE" value="Enhance OTA module with detailed error handling and logging, refine update mechanism, and bump version to 1.6.1." />
+    <MESSAGE value="Enhance OTA module with improved error handling, fallback logic, and refined update mechanism; bump version to 1.6.1." />
+    <option name="LAST_COMMIT_MESSAGE" value="Enhance OTA module with improved error handling, fallback logic, and refined update mechanism; bump version to 1.6.1." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
