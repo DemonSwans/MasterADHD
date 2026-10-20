@@ -4,9 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="version">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -51,23 +51,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.1480287193838343" />
-      <entry key="MS500" value="4.086861506829212" />
-      <entry key="S2" value="10.256980227665041" />
-      <entry key="S5" value="20.13428357461999" />
-      <entry key="S10" value="36.51902916280401" />
-      <entry key="S30" value="66.8947085656536" />
-      <entry key="S60" value="80.09888774628165" />
-      <entry key="M2" value="88.23331530310942" />
-      <entry key="M5" value="105.47821957523028" />
-      <entry key="M10" value="149.62923739245062" />
-      <entry key="M15" value="198.7621722200163" />
-      <entry key="M30" value="354.110774206444" />
-      <entry key="H1" value="661.3595826271929" />
-      <entry key="H2" value="1085.4253445294382" />
-      <entry key="H4" value="1474.8982346411947" />
-      <entry key="D1" value="1971.611272852982" />
-      <entry key="W1" value="2082.4326534902316" />
+      <entry key="MS100" value="1.4757953429119" />
+      <entry key="MS500" value="5.160138890753587" />
+      <entry key="S2" value="15.35637709562012" />
+      <entry key="S5" value="28.066698880505122" />
+      <entry key="S10" value="42.46734739674852" />
+      <entry key="S30" value="84.3182313616515" />
+      <entry key="S60" value="115.89220362278799" />
+      <entry key="M2" value="142.0901944187838" />
+      <entry key="M5" value="188.54393984835363" />
+      <entry key="M10" value="270.12595166463956" />
+      <entry key="M15" value="345.06499952172385" />
+      <entry key="M30" value="538.5935511836371" />
+      <entry key="H1" value="874.3510860087198" />
+      <entry key="H2" value="1346.8659861716314" />
+      <entry key="H4" value="1802.8330534061884" />
+      <entry key="D1" value="2409.7162795543004" />
+      <entry key="W1" value="2547.6117711986967" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -89,23 +89,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.1308549551907099" />
-      <entry key="MS500" value="4.070067308384268" />
-      <entry key="S2" value="10.24592054990617" />
-      <entry key="S5" value="20.124542189859117" />
-      <entry key="S10" value="36.50940496746506" />
-      <entry key="S30" value="66.88847140146157" />
-      <entry key="S60" value="80.09510216641337" />
-      <entry key="M2" value="88.23121616488983" />
-      <entry key="M5" value="105.47720177406693" />
-      <entry key="M10" value="149.6284884246003" />
-      <entry key="M15" value="198.76148577578866" />
-      <entry key="M30" value="354.1101317814645" />
-      <entry key="H1" value="661.3589723147282" />
-      <entry key="H2" value="1085.4248415966863" />
-      <entry key="H4" value="1474.89789179462" />
-      <entry key="D1" value="1971.6111942708146" />
-      <entry key="W1" value="2082.432641407414" />
+      <entry key="MS100" value="1.4446196915585314" />
+      <entry key="MS500" value="5.136116894732066" />
+      <entry key="S2" value="15.337912214467943" />
+      <entry key="S5" value="28.052883455289095" />
+      <entry key="S10" value="42.45678404578504" />
+      <entry key="S30" value="84.31127488556984" />
+      <entry key="S60" value="115.88743148510993" />
+      <entry key="M2" value="142.0872601311115" />
+      <entry key="M5" value="188.54217106099318" />
+      <entry key="M10" value="270.1243234992262" />
+      <entry key="M15" value="345.063456920117" />
+      <entry key="M30" value="538.5922615382725" />
+      <entry key="H1" value="874.3500685502604" />
+      <entry key="H2" value="1346.8652392781148" />
+      <entry key="H4" value="1802.8325682021323" />
+      <entry key="D1" value="2409.7161722624473" />
+      <entry key="W1" value="2547.611754842258" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -137,7 +137,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
-    "settings.editor.selected.configurable": "ml.llm.LLMThirdPartyAiProvidersConfigurable"
+    "settings.editor.selected.configurable": "ai.kilocode.jetbrains.settings.agentBehavior.agents"
   }
 }]]></component>
   <component name="SharedIndexes">
@@ -161,7 +161,7 @@
       <workItem from="1792442406902" duration="6031000" />
       <workItem from="1792507935861" duration="2787000" />
       <workItem from="1792510741720" duration="754000" />
-      <workItem from="1792511515323" duration="4254000" />
+      <workItem from="1792511515323" duration="5858000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -443,7 +443,23 @@
       <option name="project" value="LOCAL" />
       <updated>1792447834473</updated>
     </task>
-    <option name="localTasksCounter" value="36" />
+    <task id="LOCAL-00036" summary="- ota_version.txt sprawdzane przed version.txt&#10;- aplikacja startuje natychmiast w najnowszej wersji OTA&#10;- brak konieczności ponownego wciskania &quot;Force Update&quot; przy każdym uruchomieniu">
+      <option name="closed" value="true" />
+      <created>1792534659317</created>
+      <option name="number" value="00036" />
+      <option name="presentableId" value="LOCAL-00036" />
+      <option name="project" value="LOCAL" />
+      <updated>1792534659317</updated>
+    </task>
+    <task id="LOCAL-00037" summary="version">
+      <option name="closed" value="true" />
+      <created>1792534720643</created>
+      <option name="number" value="00037" />
+      <option name="presentableId" value="LOCAL-00037" />
+      <option name="project" value="LOCAL" />
+      <updated>1792534720643</updated>
+    </task>
+    <option name="localTasksCounter" value="38" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -461,8 +477,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Add auto-update system, improve database sync handling, and enhance GitHub Actions for APK release." />
-    <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and improve APK renaming process." />
     <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and adjust APK naming process." />
     <MESSAGE value="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check." />
     <MESSAGE value="Add draggable task handles, update UI alignment, and increment app version to 1.1" />
@@ -486,7 +500,9 @@
     <MESSAGE value="Improve mobile layout for task items and bump version to 1.6.7" />
     <MESSAGE value="Add focus timer and completed tasks archive; bump version to 1.6.8" />
     <MESSAGE value="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9" />
+    <MESSAGE value="- ota_version.txt sprawdzane przed version.txt&#10;- aplikacja startuje natychmiast w najnowszej wersji OTA&#10;- brak konieczności ponownego wciskania &quot;Force Update&quot; przy każdym uruchomieniu" />
+    <MESSAGE value="version" />
+    <option name="LAST_COMMIT_MESSAGE" value="version" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

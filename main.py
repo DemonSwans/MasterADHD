@@ -176,7 +176,7 @@ def load_and_run(page: ft.Page):
         updated, new_ver = check_and_download_ota(status_cb=status_cb)
 
     try:
-        # 2. Jeśli mamy pobrany nowszy moduł w pamięci podręcznej OTA -> ładujemy go!
+        # 2. Jeśli mamy pobrany nowszy moduł w pamięci podręcznej OTA -> ładujemy go od razu!
         page.controls.clear()
         target_ota = OTA_LOGIC_FILE
         if not os.path.exists(target_ota):
@@ -186,7 +186,15 @@ def load_and_run(page: ft.Page):
                 if os.path.exists(alt_ota):
                     target_ota = alt_ota
 
-        if os.path.exists(target_ota):
+        # Jeśli kod został pobrany (updated=True) -> od razu ładujemy nowy kod bez sprawdzania pliku wersji!
+        if updated:
+            print(f"[OTA] Ładowanie najnowszej pobranej wersji v{new_ver}")
+            spec = importlib.util.spec_from_file_location("app_logic_ota", OTA_LOGIC_FILE)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["app_logic"] = mod
+            spec.loader.exec_module(mod)
+            mod.main(page)
+        elif os.path.exists(target_ota):
             print(f"[OTA] Ładowanie zaktualizowanego modułu z {target_ota}")
             spec = importlib.util.spec_from_file_location("app_logic_ota", target_ota)
             mod = importlib.util.module_from_spec(spec)
