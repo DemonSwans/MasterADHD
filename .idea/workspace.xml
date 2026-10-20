@@ -4,11 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add focus timer and completed tasks archive; bump version to 1.6.8">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/version.txt" beforeDir="false" afterPath="$PROJECT_DIR$/version.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -53,23 +51,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.4244286864983837" />
-      <entry key="MS500" value="4.552259707982213" />
-      <entry key="S2" value="13.344776089817815" />
-      <entry key="S5" value="20.353972925822458" />
-      <entry key="S10" value="24.10294686510488" />
-      <entry key="S30" value="27.257421783965537" />
-      <entry key="S60" value="28.836449721442936" />
-      <entry key="M2" value="35.89716463519266" />
-      <entry key="M5" value="86.37975542843208" />
-      <entry key="M10" value="161.80934678335814" />
-      <entry key="M15" value="219.3370704944695" />
-      <entry key="M30" value="383.99236372087205" />
-      <entry key="H1" value="688.0272356794042" />
-      <entry key="H2" value="1055.8847708045014" />
-      <entry key="H4" value="1360.898851363752" />
-      <entry key="D1" value="1723.2699277007002" />
-      <entry key="W1" value="1802.0954244874745" />
+      <entry key="MS100" value="1.1480287193838343" />
+      <entry key="MS500" value="4.086861506829212" />
+      <entry key="S2" value="10.256980227665041" />
+      <entry key="S5" value="20.13428357461999" />
+      <entry key="S10" value="36.51902916280401" />
+      <entry key="S30" value="66.8947085656536" />
+      <entry key="S60" value="80.09888774628165" />
+      <entry key="M2" value="88.23331530310942" />
+      <entry key="M5" value="105.47821957523028" />
+      <entry key="M10" value="149.62923739245062" />
+      <entry key="M15" value="198.7621722200163" />
+      <entry key="M30" value="354.110774206444" />
+      <entry key="H1" value="661.3595826271929" />
+      <entry key="H2" value="1085.4253445294382" />
+      <entry key="H4" value="1474.8982346411947" />
+      <entry key="D1" value="1971.611272852982" />
+      <entry key="W1" value="2082.4326534902316" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -91,23 +89,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.3672402935548262" />
-      <entry key="MS500" value="4.5169266424135435" />
-      <entry key="S2" value="13.320159366840386" />
-      <entry key="S5" value="20.339111026903566" />
-      <entry key="S10" value="24.09417113119645" />
-      <entry key="S30" value="27.254119307875644" />
-      <entry key="S60" value="28.834708192723376" />
-      <entry key="M2" value="35.896093679600874" />
-      <entry key="M5" value="86.37874146968933" />
-      <entry key="M10" value="161.808396294573" />
-      <entry key="M15" value="219.3362120673523" />
-      <entry key="M30" value="383.9916260798292" />
-      <entry key="H1" value="688.0265885767355" />
-      <entry key="H2" value="1055.8842779306383" />
-      <entry key="H4" value="1360.8985336488804" />
-      <entry key="D1" value="1723.2698585548242" />
-      <entry key="W1" value="1802.0954139368405" />
+      <entry key="MS100" value="1.1308549551907099" />
+      <entry key="MS500" value="4.070067308384268" />
+      <entry key="S2" value="10.24592054990617" />
+      <entry key="S5" value="20.124542189859117" />
+      <entry key="S10" value="36.50940496746506" />
+      <entry key="S30" value="66.88847140146157" />
+      <entry key="S60" value="80.09510216641337" />
+      <entry key="M2" value="88.23121616488983" />
+      <entry key="M5" value="105.47720177406693" />
+      <entry key="M10" value="149.6284884246003" />
+      <entry key="M15" value="198.76148577578866" />
+      <entry key="M30" value="354.1101317814645" />
+      <entry key="H1" value="661.3589723147282" />
+      <entry key="H2" value="1085.4248415966863" />
+      <entry key="H4" value="1474.89789179462" />
+      <entry key="D1" value="1971.6111942708146" />
+      <entry key="W1" value="2082.432641407414" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -139,7 +137,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
-    "settings.editor.selected.configurable": "ml.llm.LLMConfigurable"
+    "settings.editor.selected.configurable": "ml.llm.LLMThirdPartyAiProvidersConfigurable"
   }
 }]]></component>
   <component name="SharedIndexes">
@@ -160,7 +158,10 @@
       <workItem from="1792159635957" duration="6650000" />
       <workItem from="1792274222548" duration="1865000" />
       <workItem from="1792349402044" duration="16550000" />
-      <workItem from="1792442406902" duration="5382000" />
+      <workItem from="1792442406902" duration="6031000" />
+      <workItem from="1792507935861" duration="2787000" />
+      <workItem from="1792510741720" duration="754000" />
+      <workItem from="1792511515323" duration="4254000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -434,7 +435,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792446332518</updated>
     </task>
-    <option name="localTasksCounter" value="35" />
+    <task id="LOCAL-00035" summary="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9">
+      <option name="closed" value="true" />
+      <created>1792447834473</created>
+      <option name="number" value="00035" />
+      <option name="presentableId" value="LOCAL-00035" />
+      <option name="project" value="LOCAL" />
+      <updated>1792447834473</updated>
+    </task>
+    <option name="localTasksCounter" value="36" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -452,7 +461,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Enable manual workflow dispatch trigger in GitHub Actions" />
     <MESSAGE value="Add auto-update system, improve database sync handling, and enhance GitHub Actions for APK release." />
     <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and improve APK renaming process." />
     <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and adjust APK naming process." />
@@ -477,7 +485,8 @@
     <MESSAGE value="Add editing and deletion support for tasks and subtasks; bump version to 1.6.6" />
     <MESSAGE value="Improve mobile layout for task items and bump version to 1.6.7" />
     <MESSAGE value="Add focus timer and completed tasks archive; bump version to 1.6.8" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add focus timer and completed tasks archive; bump version to 1.6.8" />
+    <MESSAGE value="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
