@@ -139,7 +139,9 @@ def pull_database():
 
     elif mode == "ha_server":
         url = get_config("ha_url", "").strip().rstrip("/")
-        if not url: return False, "Brak adresu serwera HA"
+        if not url: 
+            print("[SYNC] Błąd: Brak adresu serwera HA")
+            return False, "Brak adresu serwera HA"
         try:
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=4) as resp:
@@ -147,19 +149,25 @@ def pull_database():
                     data = resp.read()
                     if is_valid_sqlite(data):
                         make_local_snapshot()
-                        with open(LOCAL_DB, "wb") as f: f.write(data)
+                        with open(LOCAL_DB, "wb") as f: 
+                            f.write(data)
                         return True, "Pobrano bazę z serwera HA"
                     return False, "Odrzucono: Pobrany plik to nie baza"
         except urllib.error.HTTPError as e:
-            if e.code == 404: return True, "Serwer HA gotowy"
-            return False, f"Błąd serwera: {e.code}"
+            print(f"[SYNC] HTTP Error {e.code} do HA: {e.reason}")
+            return False, f"Błąd serwera (kod {e.code}): Nie udało się połączyć z serwerem."
         except Exception as e:
+            print(f"[SYNC] Błąd połączenia z HA: {e}")
             return False, f"Brak połączenia z HA: {e}"
 
     elif mode == "folder":
         folder = get_config("sync_folder", "").strip()
-        if not folder: return False, "Nie podano ścieżki do folderu!"
-        if not os.path.exists(folder): return False, "Podany folder nie istnieje na dysku!"
+        if not folder: 
+            print("[SYNC] Błąd: Nie podano ścieżki do folderu!")
+            return False, "Nie podano ścieżki do folderu!"
+        if not os.path.exists(folder): 
+            print(f"[SYNC] Błąd: Folder '{folder}' nie istnieje!")
+            return False, "Podany folder nie istnieje na dysku!"
 
         remote_file = os.path.join(folder, "tasks.db")
         if os.path.exists(remote_file):
@@ -172,6 +180,7 @@ def pull_database():
                     return True, "Pobrano bazę z folderu"
                 return False, "Odrzucono: Plik uszkodzony"
             except Exception as e:
+                print(f"[SYNC] Błąd odczytu z folderu: {e}")
                 return False, f"Błąd odczytu z dysku: {e}"
         return True, "Folder gotowy"
     return True, "Tryb lokalny"
@@ -263,10 +272,20 @@ def push_database_async():
     mode = get_config("sync_mode", "none")
     if mode == "none":
         return
-    if mode == "folder":
-        push_database()
-    else:
-        threading.Thread(target=push_database, daemon=True).start()
+    
+    try:
+        if mode == "folder":
+            # Tryb folder - synchroniczny z pauzą, żeby uniknąć konfliktów plików i zapewnić niezawodność na urządzeniach mobilnych
+            push_database()
+            # Krótka pauza po zakończeniu zapisu aby system zdążył pisać na dysk (szczególnie ważne dla SSD/USB w telefonach)
+            time.sleep(0.1)
+        else:
+            # Tryb GitHub/HA - asynchroniczny dla płynności UI, z pauzą po starcie wątku
+            thread = threading.Thread(target=push_database, daemon=True)
+            thread.start()
+            time.sleep(0.1)
+    except Exception as e:
+        print(f"[SYNC] Błąd w trybie {mode}: {e}")
 
 
 # --- BAZA DANYCH I LOGIKA ---
@@ -336,6 +355,17 @@ def make_local_snapshot():
         except Exception as e:
             return False, str(e)
     return False, "Brak bazy lokalnej"
+
+
+def reset_sync_on_exit():
+    """Resetuje stan synchronizacji przy wyjściu z aplikacji."""
+    try:
+        # Usuń snapshot po zakończeniu pracy aby nie blokować plików
+        snapshot_path = os.path.join(APP_DIR, "tasks_pre_sync_backup.db")
+        if os.path.exists(snapshot_path):
+            os.remove(snapshot_path)
+    except Exception:
+        pass
 
 
 def restore_pre_sync_backup():
@@ -550,6 +580,13 @@ def delete_subtask_db(task_id, subtask_idx):
     push_database_async()
 
 
+def _sync_only_local():
+    """Change to local-only sync mode with confirmation message."""
+    change_sync_mode("none")
+    status_text.value = "✓ Zapisano tylko lokalnie"
+    refresh_view()
+
+
 def edit_subtask_title_db(task_id, subtask_idx, new_title):
     with sqlite3.connect(LOCAL_DB) as conn:
         row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -637,6 +674,10 @@ def main(page: ft.Page):
     page.padding = 0
     page.bgcolor = COLOR_BG_MAIN
     page.theme_mode = ft.ThemeMode.DARK
+    
+    # Obsługa zamknięcia aplikacji przez klawisz ESC lub wyjście z trybu pełnoekranowego
+    page.on_closing = lambda e: (reset_sync_on_exit(), sys.exit(0))
+    
     init_db()
 
     current_view = "daily"
@@ -813,6 +854,12 @@ def main(page: ft.Page):
         warning_text.value = "" if ok else f"⚠️ {msg}"
         refresh_view()
 
+    def _sync_only_local():
+        """Change to local-only sync mode with confirmation message."""
+        change_sync_mode("none")
+        status_text.value = "✓ Zapisano tylko lokalnie"
+        refresh_view()
+
     def trigger_manual_ota(e=None):
         try:
             status_text.value = "⏳ Sprawdzanie i pobieranie najnowszej wersji z GitHuba..."
@@ -826,23 +873,39 @@ def main(page: ft.Page):
                 "Pragma": "no-cache",
                 "User-Agent": "MasterADHD-OTA/1.0"
             }
-            try:
-                ctx = ssl._create_unverified_context()
-            except Exception:
-                ctx = None
-
+            
+            # Pobierz wersję
             url_ver = f"{github_base}/version.txt?t={ts}"
             req_ver = urllib.request.Request(url_ver, headers=headers)
-            with urllib.request.urlopen(req_ver, timeout=6, context=ctx) as resp:
-                remote_ver = resp.read().decode("utf-8").strip()
+            try:
+                with urllib.request.urlopen(req_ver, timeout=6, context=None) as resp:
+                    remote_ver = resp.read().decode("utf-8").strip()
+            except Exception as ve:
+                warning_text.value = f"⚠️ Nie udało się pobrać wersji: {ve}"
+                status_text.value = ""
+                refresh_view()
+                return
 
+            # Pobierz kod źródłowy
             url_code = f"{github_base}/app_logic.py?t={ts}"
             req_code = urllib.request.Request(url_code, headers=headers)
-            with urllib.request.urlopen(req_code, timeout=12, context=ctx) as resp_code:
-                new_code = resp_code.read().decode("utf-8")
+            try:
+                with urllib.request.urlopen(req_code, timeout=12, context=None) as resp_code:
+                    new_code = resp_code.read().decode("utf-8")
+            except Exception as ve:
+                warning_text.value = f"⚠️ Nie udało się pobrać kodu: {ve}"
+                status_text.value = ""
+                refresh_view()
+                return
 
             # Weryfikacja składni przed zapisem
-            compile(new_code, "app_logic_ota.py", "exec")
+            try:
+                compile(new_code, "app_logic_ota.py", "exec")
+            except SyntaxError as ce:
+                warning_text.value = f"⚠️ Błąd składni w pobranym kodzie! Został on odrzucony."
+                status_text.value = ""
+                refresh_view()
+                return
 
             # Zapisujemy w obu potencjalnych lokalizacjach (dla kompatybilności ze wszystkimi wersjami main.py)
             targets = [APP_DIR]
@@ -856,7 +919,7 @@ def main(page: ft.Page):
                 targets.append(os.path.join(base_env, "data"))
             else:
                 targets.append(os.path.join(os.path.expanduser("~"), ".master_adhd_data"))
-            
+
             # Nadpisujemy version.txt w folderze projektu aby wersja była zgodna z nowym kodem
             try:
                 ver_file = os.path.join(base_dir, "version.txt")
@@ -866,22 +929,25 @@ def main(page: ft.Page):
             except Exception as ve:
                 print(f"[OTA] Błąd nadpisywania version.txt: {ve}")
 
+            # Zapisz pliki OTA dla każdej lokalizacji
             for target_dir in set(targets):
                 try:
                     os.makedirs(target_dir, exist_ok=True)
-                    with open(os.path.join(target_dir, "app_logic_ota.py"), "w", encoding="utf-8") as f:
+                    ota_file = os.path.join(target_dir, "app_logic_ota.py")
+                    with open(ota_file, "w", encoding="utf-8") as f:
                         f.write(new_code)
-                    with open(os.path.join(target_dir, "ota_version.txt"), "w", encoding="utf-8") as f:
+                    ota_ver_file = os.path.join(target_dir, "ota_version.txt")
+                    with open(ota_ver_file, "w", encoding="utf-8") as f:
                         f.write(remote_ver)
-                except Exception:
-                    pass
+                except Exception as we:
+                    print(f"[OTA] Błąd zapisu w {target_dir}: {we}")
 
             status_text.value = f"✓ Pomyślnie pobrano v{remote_ver}! Restartowanie aplikacji..."
             page.update()
 
             # Zamknij aplikację i uruchom nową wersję (PEŁNY RESTART - ważne po OTA update!)
             import subprocess
-            time.sleep(1)  # Krótka pauza
+            time.sleep(1.5)  # Dłuższa pauza na zapis
             
             # Na PC: spróbuj uruchomić nowy proces
             try:
@@ -891,13 +957,13 @@ def main(page: ft.Page):
                 cmd = [python_path, "-m", "flet.app", app_path]
                 subprocess.run(cmd)
             except Exception as restart_error:
-                print(f"[OTA RESTART] Podmienienie restart: {restart_error}")
-            
+                print(f"[OTA RESTART] Próba restartu nie powiodła się: {restart_error}")
+
             # Wyjście z procesu - aplikacja się zamknie i trzeba ponownie uruchomić
             print(f"[OTA] Zakończenie aplikacji. Proszę ponownie otworzyć aplikację!")
             os._exit(0)
         except Exception as ex:
-            warning_text.value = f"Błąd aktualizacji OTA: {ex}"
+            warning_text.value = f"⚠️ Błąd aktualizacji OTA: {ex}"
             status_text.value = ""
             refresh_view()
 
@@ -1218,6 +1284,10 @@ def main(page: ft.Page):
         status_text.value = warning_text.value = ""
         refresh_view()
 
+    # Reset synchronizacji przy zmianie widoku (unikamy konfliktów plików w trybie folder)
+    if "folder" in get_config("sync_mode", ""):
+        page.on_resize = lambda e, orig=page.on_resize: (reset_sync_on_exit(), refresh_view())
+
     def highlight_nav(box, is_hover, default_border=None):
         box.border = ft.Border.all(2, COLOR_PRIO_B) if is_hover else default_border
         page.update()
@@ -1326,7 +1396,7 @@ def main(page: ft.Page):
         bgcolor=COLOR_BG_CARD,
         padding=ft.Padding.symmetric(vertical=4, horizontal=6),
         border=ft.Border(top=ft.BorderSide(1, COLOR_BG_BORDER)),
-        content=ft.Row([daily_mob_target, master_mob_target, settings_mob_box, archive_mob_box],
+        content=ft.Row([daily_mob_target, master_mob_target, archive_mob_box, settings_mob_box],
                        alignment=ft.MainAxisAlignment.SPACE_AROUND)
     )
 
@@ -1493,7 +1563,15 @@ def main(page: ft.Page):
                     ft.Button("Włącz Home Assistant (HA)", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=lambda e: change_sync_mode("ha_server")),
                     folder_input,
                     ft.Button("Włącz synchronizację z folderem (Dysk PC)", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=lambda e: change_sync_mode("folder")),
-                    ft.Button("Tylko lokalnie (Brak synchronizacji)", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_SECONDARY, on_click=lambda e: change_sync_mode("none"))
+                    ft.Button("Tylko lokalnie (Brak synchronizacji)", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_SECONDARY, on_click=lambda e: change_sync_mode("none")),
+                    ft.Divider(height=1, color=ft.Colors.GREY_800),
+                    ft.Text("🔧 Reset i Synchronizacja", weight=ft.FontWeight.BOLD, size=13, color=COLOR_TEXT_PRIMARY),
+                    ft.Row([
+                        ft.Button("⚡ Ręczny reset synchronizacji", bgcolor=COLOR_BG_SURFACE, color=COLOR_PRIO_B,
+                                  on_click=lambda e: (reset_sync_on_exit(), refresh_view())),
+                        ft.Button("💾 Zapisz tylko lokalnie", bgcolor="#ef444422", color=COLOR_PRIO_A,
+                                  on_click=lambda e: _sync_only_local())
+                    ], spacing=8)
                 ], spacing=8)
             )
 
@@ -1508,6 +1586,7 @@ def main(page: ft.Page):
                     ft.Row([
                         ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
                                   on_click=trigger_manual_ota),
+                        ft.Container(expand=True),
                         ft.Button("🛑 Zamknij aplikację (Wymuś restart)", bgcolor="#ef444422", color=COLOR_PRIO_A,
                                   on_click=lambda e: os._exit(0))
                     ], wrap=True, spacing=10)
@@ -1674,18 +1753,19 @@ def main(page: ft.Page):
             progress_text.weight = ft.FontWeight.BOLD
 
             for r in all_routines:
-                is_r_done = bool(r[2])
+                rid, rname, cdone = r[0], r[1], r[2]
+                is_r_done = bool(cdone)
                 routines_row.controls.append(
                     ft.Container(
                         bgcolor="#10b98122" if is_r_done else COLOR_BG_SURFACE,
                         border=ft.Border.all(1, COLOR_SUCCESS if is_r_done else COLOR_BG_BORDER),
                         padding=ft.Padding.symmetric(horizontal=10, vertical=6),
                         border_radius=14,
-                        on_click=lambda e, rid=r[0], cdone=r[2]: (toggle_routine_db(rid, not cdone), refresh_view()),
+                        on_click=lambda e, rid=rid, cdone=cdone: (toggle_routine_db(rid, not cdone), refresh_view()),
                         content=ft.Row([
                             ft.Icon(ft.Icons.CHECK_CIRCLE if is_r_done else ft.Icons.RADIO_BUTTON_UNCHECKED, size=15,
                                     color=COLOR_SUCCESS if is_r_done else COLOR_TEXT_SECONDARY),
-                            ft.Text(r[1], size=12, color=COLOR_TEXT_PRIMARY if is_r_done else COLOR_TEXT_SECONDARY,
+                            ft.Text(rname, size=12, color=COLOR_TEXT_PRIMARY if is_r_done else COLOR_TEXT_SECONDARY,
                                     weight=ft.FontWeight.W_500,
                                     style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_r_done else None))
                         ], spacing=6, tight=True)

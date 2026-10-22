@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="gg">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Fix OTA sync: Priority version from repo, full app restart after update, corrected settings UI to show APP_VERSION instead of FALLBACK_VERSION">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
     </list>
@@ -51,23 +51,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.5881090630918975" />
-      <entry key="MS500" value="3.1396845475476116" />
-      <entry key="S2" value="10.656101186424378" />
-      <entry key="S5" value="25.648428074055786" />
-      <entry key="S10" value="45.20726170965285" />
-      <entry key="S30" value="80.76859041959713" />
-      <entry key="S60" value="103.56998208028872" />
-      <entry key="M2" value="129.74675034885152" />
-      <entry key="M5" value="166.50463153556845" />
-      <entry key="M10" value="190.79241710898273" />
-      <entry key="M15" value="208.50052406798338" />
-      <entry key="M30" value="301.68609432378184" />
-      <entry key="H1" value="589.3419340383696" />
-      <entry key="H2" value="1126.1928291046142" />
-      <entry key="H4" value="1749.1837295021082" />
-      <entry key="D1" value="2704.428816304869" />
-      <entry key="W1" value="2936.551323127715" />
+      <entry key="MS100" value="1.5529404356035936" />
+      <entry key="MS500" value="2.636007769709664" />
+      <entry key="S2" value="9.024162110760297" />
+      <entry key="S5" value="15.382616699994411" />
+      <entry key="S10" value="20.43153419787918" />
+      <entry key="S30" value="32.48707753128033" />
+      <entry key="S60" value="39.77395236273182" />
+      <entry key="M2" value="45.31843937688508" />
+      <entry key="M5" value="60.826607209207324" />
+      <entry key="M10" value="114.87113824341756" />
+      <entry key="M15" value="187.81273329439725" />
+      <entry key="M30" value="416.4935505407283" />
+      <entry key="H1" value="813.1667713626299" />
+      <entry key="H2" value="1461.3469883076527" />
+      <entry key="H4" value="2290.292845752884" />
+      <entry key="D1" value="3758.0734123084844" />
+      <entry key="W1" value="4145.732619578952" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -89,23 +89,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.5234099625913642" />
-      <entry key="MS500" value="3.1134623004711486" />
-      <entry key="S2" value="10.635426938920414" />
-      <entry key="S5" value="25.629273801598917" />
-      <entry key="S10" value="45.190563779440836" />
-      <entry key="S30" value="80.7586712938601" />
-      <entry key="S60" value="103.5635745725775" />
-      <entry key="M2" value="129.74267753812669" />
-      <entry key="M5" value="166.50248891824026" />
-      <entry key="M10" value="190.79117196814084" />
-      <entry key="M15" value="208.49961373516965" />
-      <entry key="M30" value="301.6854311360429" />
-      <entry key="H1" value="589.341285322493" />
-      <entry key="H2" value="1126.1922223230044" />
-      <entry key="H4" value="1749.1832672216422" />
-      <entry key="D1" value="2704.4286975833006" />
-      <entry key="W1" value="2936.551304551174" />
+      <entry key="MS100" value="1.510462427632232" />
+      <entry key="MS500" value="2.620434731619427" />
+      <entry key="S2" value="9.008579453340996" />
+      <entry key="S5" value="15.371563440959934" />
+      <entry key="S10" value="20.424074709655944" />
+      <entry key="S30" value="32.4830486745123" />
+      <entry key="S60" value="39.771471428577094" />
+      <entry key="M2" value="45.317022783589934" />
+      <entry key="M5" value="60.82585562210072" />
+      <entry key="M10" value="114.87043985753354" />
+      <entry key="M15" value="187.81196912367838" />
+      <entry key="M30" value="416.49269325390225" />
+      <entry key="H1" value="813.1659255203504" />
+      <entry key="H2" value="1461.3462246381948" />
+      <entry key="H4" value="2290.2922494449394" />
+      <entry key="D1" value="3758.0732489611905" />
+      <entry key="W1" value="4145.732593661355" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -137,7 +137,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
-    "settings.editor.selected.configurable": "ml.llm.LLMTrustedDomainsConfigurableProvider"
+    "settings.editor.selected.configurable": "ml.llm.LLMThirdPartyAiProvidersConfigurable"
   }
 }]]></component>
   <component name="SharedIndexes">
@@ -162,7 +162,9 @@
       <workItem from="1792507935861" duration="2787000" />
       <workItem from="1792510741720" duration="754000" />
       <workItem from="1792511515323" duration="7224000" />
-      <workItem from="1792677019044" duration="2044000" />
+      <workItem from="1792677019044" duration="6164000" />
+      <workItem from="1792698745129" duration="998000" />
+      <workItem from="1792699759228" duration="3791000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -468,7 +470,23 @@
       <option name="project" value="LOCAL" />
       <updated>1792536166906</updated>
     </task>
-    <option name="localTasksCounter" value="39" />
+    <task id="LOCAL-00039" summary="fix: OTA update version loading - prioritize repo's version.txt&#10;&#10;Changed get_local_version() to always check repo's version.txt first, &#10;then fall back to ota_version.txt only if version.txt is missing. This &#10;fixes the issue where phones showed old versions after OTA updates &#10;and broke cross-device synchronization.">
+      <option name="closed" value="true" />
+      <created>1792682208283</created>
+      <option name="number" value="00039" />
+      <option name="presentableId" value="LOCAL-00039" />
+      <option name="project" value="LOCAL" />
+      <updated>1792682208283</updated>
+    </task>
+    <task id="LOCAL-00040" summary="fix: OTA update version loading - prioritize repo's version.txt&#10;&#10;Changed get_local_version() to always check repo's version.txt first, &#10;then fall back to ota_version.txt only if version.txt is missing. This &#10;fixes the issue where phones showed old versions after OTA updates &#10;and broke cross-device synchronization.">
+      <option name="closed" value="true" />
+      <created>1792682218509</created>
+      <option name="number" value="00040" />
+      <option name="presentableId" value="LOCAL-00040" />
+      <option name="project" value="LOCAL" />
+      <updated>1792682218509</updated>
+    </task>
+    <option name="localTasksCounter" value="41" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -486,7 +504,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check." />
     <MESSAGE value="Add draggable task handles, update UI alignment, and increment app version to 1.1" />
     <MESSAGE value="Refactor update checker to support both main and master branches, enhance task UI with draggable handles, and add comprehensive pytest tests." />
     <MESSAGE value="Add comment marker to separate main script execution" />
@@ -511,7 +528,8 @@
     <MESSAGE value="- ota_version.txt sprawdzane przed version.txt&#10;- aplikacja startuje natychmiast w najnowszej wersji OTA&#10;- brak konieczności ponownego wciskania &quot;Force Update&quot; przy każdym uruchomieniu" />
     <MESSAGE value="version" />
     <MESSAGE value="gg" />
-    <option name="LAST_COMMIT_MESSAGE" value="gg" />
+    <MESSAGE value="fix: OTA update version loading - prioritize repo's version.txt&#10;&#10;Changed get_local_version() to always check repo's version.txt first, &#10;then fall back to ota_version.txt only if version.txt is missing. This &#10;fixes the issue where phones showed old versions after OTA updates &#10;and broke cross-device synchronization." />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: OTA update version loading - prioritize repo's version.txt&#10;&#10;Changed get_local_version() to always check repo's version.txt first, &#10;then fall back to ota_version.txt only if version.txt is missing. This &#10;fixes the issue where phones showed old versions after OTA updates &#10;and broke cross-device synchronization." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
