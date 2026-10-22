@@ -30,10 +30,7 @@ jobs:
         run: |
           pip install flet pytest
 
-      - name: Wstrzyknij wersję z version.txt prosto do app_logic.py
-        run: |
-          VER=$(cat version.txt | tr -d '[:space:]')
-          sed -i "s/FALLBACK_VERSION = \".*\"/FALLBACK_VERSION = \"$VER\"/g" app_logic.py
+      # Używamy APP_VERSION z app_logic.py który już czyta wersję z version.txt (nie ma potrzeby podmiany FALLBACK_VERSION)
 
       - name: Uruchom testy (pytest)
         run: pytest test_app.py -v

@@ -45,29 +45,20 @@ def is_newer_version(remote_ver: str, local_ver: str) -> bool:
 
 
 def get_installed_ota_version() -> str:
-    if os.path.exists(OTA_VERSION_FILE):
-        try:
-            with open(OTA_VERSION_FILE, "r", encoding="utf-8") as f:
-                val = f.read().strip()
-                if val:
-                    return val
-        except Exception as e:
-            print(f"[OTA] Błąd odczytu pliku wersji OTA ({OTA_VERSION_FILE}): {e}")
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        ver_file = os.path.join(base_dir, "version.txt")
-        if os.path.exists(ver_file):
-            with open(ver_file, "r", encoding="utf-8") as f:
-                val = f.read().strip()
-                if val:
-                    return val
-    except Exception as e:
-        print(f"[OTA] Błąd odczytu pliku version.txt: {e}")
+    """Sprawdza wersję zgodnie z priorytetem z app_logic.get_local_version()."""
     try:
         import app_logic
-        return getattr(app_logic, "FALLBACK_VERSION", "0.0.0")
+        # Używamy get_local_version() z repozytorium (priorytet) zamiast starego FALLBACK_VERSION
+        return getattr(app_logic, "APP_VERSION", "0.0.0")
     except Exception as e:
-        print(f"[OTA] Błąd pobierania wersji bazowej z app_logic: {e}")
+        print(f"[OTA] Błąd pobierania wersji z app_logic: {e}")
+        # Fallback do ota_version.txt (tylko jeśli nie ma kodu z repozytorium)
+        if os.path.exists(OTA_VERSION_FILE):
+            try:
+                with open(OTA_VERSION_FILE, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
         return "0.0.0"
 
 

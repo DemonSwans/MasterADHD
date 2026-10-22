@@ -5,8 +5,10 @@ import os
 import shutil
 import sqlite3
 import ssl
+import subprocess
 import sys
 import threading
+import time
 import traceback
 import urllib.error
 import urllib.parse
@@ -844,12 +846,25 @@ def main(page: ft.Page):
 
             # Zapisujemy w obu potencjalnych lokalizacjach (dla kompatybilności ze wszystkimi wersjami main.py)
             targets = [APP_DIR]
+            # Dodajemy folder głównego projektu jako dodatkowy target (ważne po restarcie!)
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            targets.append(base_dir)
+            
             base_env = os.environ.get("FLET_APP_STORAGE_DATA")
             if base_env:
                 targets.append(os.path.join(base_env, ".master_adhd_data"))
                 targets.append(os.path.join(base_env, "data"))
             else:
                 targets.append(os.path.join(os.path.expanduser("~"), ".master_adhd_data"))
+            
+            # Nadpisujemy version.txt w folderze projektu aby wersja była zgodna z nowym kodem
+            try:
+                ver_file = os.path.join(base_dir, "version.txt")
+                with open(ver_file, "w", encoding="utf-8") as f:
+                    f.write(remote_ver)
+                print(f"[OTA] Nadpisano version.txt w {ver_file} z wersją {remote_ver}")
+            except Exception as ve:
+                print(f"[OTA] Błąd nadpisywania version.txt: {ve}")
 
             for target_dir in set(targets):
                 try:
@@ -861,19 +876,26 @@ def main(page: ft.Page):
                 except Exception:
                     pass
 
-            status_text.value = f"✓ Pomyślnie pobrano v{remote_ver}! Przeładowywanie..."
+            status_text.value = f"✓ Pomyślnie pobrano v{remote_ver}! Restartowanie aplikacji..."
             page.update()
 
-            ota_file = os.path.join(APP_DIR, "app_logic_ota.py")
-
-            # Dynamiczne przeładowanie modułu w pamięci i natychmiastowe odświeżenie okna
-            spec = importlib.util.spec_from_file_location("app_logic_ota", ota_file)
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules["app_logic"] = mod
-            spec.loader.exec_module(mod)
-            page.controls.clear()
-            mod.main(page)
-            return
+            # Zamknij aplikację i uruchom nową wersję (PEŁNY RESTART - ważne po OTA update!)
+            import subprocess
+            time.sleep(1)  # Krótka pauza
+            
+            # Na PC: spróbuj uruchomić nowy proces
+            try:
+                python_path = sys.executable if hasattr(sys, "exec_prefix") else "python"
+                app_path = os.path.abspath("main.py")
+                
+                cmd = [python_path, "-m", "flet.app", app_path]
+                subprocess.run(cmd)
+            except Exception as restart_error:
+                print(f"[OTA RESTART] Podmienienie restart: {restart_error}")
+            
+            # Wyjście z procesu - aplikacja się zamknie i trzeba ponownie uruchomić
+            print(f"[OTA] Zakończenie aplikacji. Proszę ponownie otworzyć aplikację!")
+            os._exit(0)
         except Exception as ex:
             warning_text.value = f"Błąd aktualizacji OTA: {ex}"
             status_text.value = ""
@@ -1482,7 +1504,7 @@ def main(page: ft.Page):
                         ft.Icon(ft.Icons.SYSTEM_UPDATE_ALT, size=18, color=COLOR_PRIO_B),
                         ft.Text("Aktualizacje OTA (GitHub)", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
                     ], spacing=8),
-                    ft.Text(f"Wersja wbudowana: v{FALLBACK_VERSION} | Aktywna: v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Text(f"Wersja wbudowana: v{APP_VERSION} | Aktywna: v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
                     ft.Row([
                         ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
                                   on_click=trigger_manual_ota),
