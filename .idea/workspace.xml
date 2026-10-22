@@ -4,9 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="version">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="gg">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -51,23 +51,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.4757953429119" />
-      <entry key="MS500" value="5.160138890753587" />
-      <entry key="S2" value="15.35637709562012" />
-      <entry key="S5" value="28.066698880505122" />
-      <entry key="S10" value="42.46734739674852" />
-      <entry key="S30" value="84.3182313616515" />
-      <entry key="S60" value="115.89220362278799" />
-      <entry key="M2" value="142.0901944187838" />
-      <entry key="M5" value="188.54393984835363" />
-      <entry key="M10" value="270.12595166463956" />
-      <entry key="M15" value="345.06499952172385" />
-      <entry key="M30" value="538.5935511836371" />
-      <entry key="H1" value="874.3510860087198" />
-      <entry key="H2" value="1346.8659861716314" />
-      <entry key="H4" value="1802.8330534061884" />
-      <entry key="D1" value="2409.7162795543004" />
-      <entry key="W1" value="2547.6117711986967" />
+      <entry key="MS100" value="1.5881090630918975" />
+      <entry key="MS500" value="3.1396845475476116" />
+      <entry key="S2" value="10.656101186424378" />
+      <entry key="S5" value="25.648428074055786" />
+      <entry key="S10" value="45.20726170965285" />
+      <entry key="S30" value="80.76859041959713" />
+      <entry key="S60" value="103.56998208028872" />
+      <entry key="M2" value="129.74675034885152" />
+      <entry key="M5" value="166.50463153556845" />
+      <entry key="M10" value="190.79241710898273" />
+      <entry key="M15" value="208.50052406798338" />
+      <entry key="M30" value="301.68609432378184" />
+      <entry key="H1" value="589.3419340383696" />
+      <entry key="H2" value="1126.1928291046142" />
+      <entry key="H4" value="1749.1837295021082" />
+      <entry key="D1" value="2704.428816304869" />
+      <entry key="W1" value="2936.551323127715" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -89,23 +89,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.4446196915585314" />
-      <entry key="MS500" value="5.136116894732066" />
-      <entry key="S2" value="15.337912214467943" />
-      <entry key="S5" value="28.052883455289095" />
-      <entry key="S10" value="42.45678404578504" />
-      <entry key="S30" value="84.31127488556984" />
-      <entry key="S60" value="115.88743148510993" />
-      <entry key="M2" value="142.0872601311115" />
-      <entry key="M5" value="188.54217106099318" />
-      <entry key="M10" value="270.1243234992262" />
-      <entry key="M15" value="345.063456920117" />
-      <entry key="M30" value="538.5922615382725" />
-      <entry key="H1" value="874.3500685502604" />
-      <entry key="H2" value="1346.8652392781148" />
-      <entry key="H4" value="1802.8325682021323" />
-      <entry key="D1" value="2409.7161722624473" />
-      <entry key="W1" value="2547.611754842258" />
+      <entry key="MS100" value="1.5234099625913642" />
+      <entry key="MS500" value="3.1134623004711486" />
+      <entry key="S2" value="10.635426938920414" />
+      <entry key="S5" value="25.629273801598917" />
+      <entry key="S10" value="45.190563779440836" />
+      <entry key="S30" value="80.7586712938601" />
+      <entry key="S60" value="103.5635745725775" />
+      <entry key="M2" value="129.74267753812669" />
+      <entry key="M5" value="166.50248891824026" />
+      <entry key="M10" value="190.79117196814084" />
+      <entry key="M15" value="208.49961373516965" />
+      <entry key="M30" value="301.6854311360429" />
+      <entry key="H1" value="589.341285322493" />
+      <entry key="H2" value="1126.1922223230044" />
+      <entry key="H4" value="1749.1832672216422" />
+      <entry key="D1" value="2704.4286975833006" />
+      <entry key="W1" value="2936.551304551174" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -137,7 +137,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
-    "settings.editor.selected.configurable": "ai.kilocode.jetbrains.settings.agentBehavior.agents"
+    "settings.editor.selected.configurable": "ml.llm.LLMTrustedDomainsConfigurableProvider"
   }
 }]]></component>
   <component name="SharedIndexes">
@@ -161,7 +161,8 @@
       <workItem from="1792442406902" duration="6031000" />
       <workItem from="1792507935861" duration="2787000" />
       <workItem from="1792510741720" duration="754000" />
-      <workItem from="1792511515323" duration="5858000" />
+      <workItem from="1792511515323" duration="7224000" />
+      <workItem from="1792677019044" duration="2044000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -459,7 +460,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792534720643</updated>
     </task>
-    <option name="localTasksCounter" value="38" />
+    <task id="LOCAL-00038" summary="gg">
+      <option name="closed" value="true" />
+      <created>1792536166906</created>
+      <option name="number" value="00038" />
+      <option name="presentableId" value="LOCAL-00038" />
+      <option name="project" value="LOCAL" />
+      <updated>1792536166906</updated>
+    </task>
+    <option name="localTasksCounter" value="39" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -477,7 +486,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Update build workflow: remove manual Flutter installation, automate APK build confirmation, and adjust APK naming process." />
     <MESSAGE value="- Refactored and optimized progress calculation by extracting `calculate_progress` into a new reusable function `calculate_progress_logic`.&#10;- Added comprehensive pytest-based unit tests for tasks, routines, subtasks, progress, and syncing logic.&#10;- Improved GitHub Actions workflow to include automated pytest test execution.&#10;- Replaced manual application entry point with a conditional `if __name__ == &quot;__main__&quot;:` check." />
     <MESSAGE value="Add draggable task handles, update UI alignment, and increment app version to 1.1" />
     <MESSAGE value="Refactor update checker to support both main and master branches, enhance task UI with draggable handles, and add comprehensive pytest tests." />
@@ -502,7 +510,8 @@
     <MESSAGE value="Add task categories, master list filters, JSON backups, and sound feedback; bump version to 1.6.9" />
     <MESSAGE value="- ota_version.txt sprawdzane przed version.txt&#10;- aplikacja startuje natychmiast w najnowszej wersji OTA&#10;- brak konieczności ponownego wciskania &quot;Force Update&quot; przy każdym uruchomieniu" />
     <MESSAGE value="version" />
-    <option name="LAST_COMMIT_MESSAGE" value="version" />
+    <MESSAGE value="gg" />
+    <option name="LAST_COMMIT_MESSAGE" value="gg" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

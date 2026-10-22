@@ -36,18 +36,19 @@ CONFIG_DB = os.path.join(APP_DIR, "app_config.db")
 # --- ODCZYT WERSJI ---
 def get_local_version():
     try:
-        # Najpierw sprawdzaj ota_version.txt (wersja pobrana przez OTA) - ma priorytet
-        ota_ver_file = os.path.join(APP_DIR, "ota_version.txt")
-        if os.path.exists(ota_ver_file):
-            with open(ota_ver_file, "r", encoding="utf-8") as f:
-                val = f.read().strip()
-                if val:
-                    return val
-        # Dopiero potem sprawdzaj version.txt (wersja z repozytorium)
+        # Najpierw sprawdzaj version.txt z repozytorium (aktualny kod)
         base_dir = os.path.dirname(os.path.abspath(__file__))
         ver_file = os.path.join(base_dir, "version.txt")
         if os.path.exists(ver_file):
             with open(ver_file, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    # W nowym kodzie z repozytorium pomijamy stare ota_version.txt
+                    return val
+        # Dopiero potem sprawdzaj ota_version.txt (pliki w folderze danych) - tylko jak brak wersji z repozytorium
+        ota_ver_file = os.path.join(APP_DIR, "ota_version.txt")
+        if os.path.exists(ota_ver_file):
+            with open(ota_ver_file, "r", encoding="utf-8") as f:
                 val = f.read().strip()
                 if val:
                     return val
