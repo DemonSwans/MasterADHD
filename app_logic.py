@@ -35,33 +35,6 @@ LOCAL_DB = os.path.join(APP_DIR, "tasks.db")
 CONFIG_DB = os.path.join(APP_DIR, "app_config.db")
 
 
-# --- ODCZYT WERSJI ---
-def get_local_version():
-    try:
-        # Najpierw sprawdzaj version.txt z repozytorium (aktualny kod)
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        ver_file = os.path.join(base_dir, "version.txt")
-        if os.path.exists(ver_file):
-            with open(ver_file, "r", encoding="utf-8") as f:
-                val = f.read().strip()
-                if val:
-                    # W nowym kodzie z repozytorium pomijamy stare ota_version.txt
-                    return val
-        # Dopiero potem sprawdzaj ota_version.txt (pliki w folderze danych) - tylko jak brak wersji z repozytorium
-        ota_ver_file = os.path.join(APP_DIR, "ota_version.txt")
-        if os.path.exists(ota_ver_file):
-            with open(ota_ver_file, "r", encoding="utf-8") as f:
-                val = f.read().strip()
-                if val:
-                    return val
-    except Exception:
-        pass
-    return FALLBACK_VERSION
-
-
-APP_VERSION = get_local_version()
-
-
 def is_newer_version(remote_ver: str, local_ver: str) -> bool:
     try:
         r_parts = [int(x) for x in remote_ver.strip().split(".")]
@@ -69,6 +42,54 @@ def is_newer_version(remote_ver: str, local_ver: str) -> bool:
         return r_parts > l_parts
     except Exception:
         return remote_ver.strip() != local_ver.strip()
+
+
+# --- ODCZYT WERSJI ---
+def get_local_version():
+    """Zwraca najwyższą znaną wersję lokalną.
+
+    Bierzemy maksimum ze wszystkich możliwych źródeł, bo na Androidzie/iOS
+    pliki wbudowane w aplikację są tylko do odczytu i pozostają na starej
+    wersji, a nowy kod leży w folderze danych (~/.master_adhd_data).
+    Wcześniejsza wersja funkcji zwracała pierwszą napotkaną wartość, przez
+    co po aktualizacji OTA aplikacja dalej pokazywała starą wersję.
+    """
+    candidates = []
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        for path in (
+            os.path.join(base_dir, "version.txt"),
+            os.path.join(base_dir, "ota_version.txt"),
+            os.path.join(APP_DIR, "version.txt"),
+            os.path.join(APP_DIR, "ota_version.txt"),
+        ):
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    val = f.read().strip()
+                    if val:
+                        candidates.append(val)
+    except Exception:
+        pass
+
+    best = ""
+    for candidate in candidates:
+        if not best or is_newer_version(candidate, best):
+            best = candidate
+    return best or FALLBACK_VERSION
+
+
+APP_VERSION = get_local_version()
+
+
+def get_ssl_context():
+    """Kontekst SSL z fallbackiem dla środowisk mobilnych (brak CA w Androidzie)."""
+    try:
+        return ssl._create_unverified_context()
+    except Exception:
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            return None
 
 
 # --- KONFIGURACJA LOKALNA ---
@@ -700,6 +721,8 @@ def main(page: ft.Page):
 
     status_text = ft.Text("", size=12, color=ft.Colors.GREEN_400)
     warning_text = ft.Text("", size=12, color=ft.Colors.RED_400)
+    # Trwała kontrolka z instrukcją po aktualizacji OTA (nie znika przy refresh_view)
+    ota_restart_hint = ft.Text("", size=12, color=COLOR_PRIO_B, selectable=True)
     title_text = ft.Text("Daily", size=22, weight=ft.FontWeight.BOLD)
 
     # --- MINUTNIK SKUPIENIA (Zasada 5 minut / Pomodoro) ---
@@ -864,6 +887,7 @@ def main(page: ft.Page):
         try:
             status_text.value = "⏳ Sprawdzanie i pobieranie najnowszej wersji z GitHuba..."
             warning_text.value = ""
+            ota_restart_hint.value = ""
             page.update()
 
             github_base = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
@@ -878,7 +902,7 @@ def main(page: ft.Page):
             url_ver = f"{github_base}/version.txt?t={ts}"
             req_ver = urllib.request.Request(url_ver, headers=headers)
             try:
-                with urllib.request.urlopen(req_ver, timeout=6, context=None) as resp:
+                with urllib.request.urlopen(req_ver, timeout=6, context=get_ssl_context()) as resp:
                     remote_ver = resp.read().decode("utf-8").strip()
             except Exception as ve:
                 warning_text.value = f"⚠️ Nie udało się pobrać wersji: {ve}"
@@ -890,7 +914,7 @@ def main(page: ft.Page):
             url_code = f"{github_base}/app_logic.py?t={ts}"
             req_code = urllib.request.Request(url_code, headers=headers)
             try:
-                with urllib.request.urlopen(req_code, timeout=12, context=None) as resp_code:
+                with urllib.request.urlopen(req_code, timeout=12, context=get_ssl_context()) as resp_code:
                     new_code = resp_code.read().decode("utf-8")
             except Exception as ve:
                 warning_text.value = f"⚠️ Nie udało się pobrać kodu: {ve}"
@@ -920,48 +944,50 @@ def main(page: ft.Page):
             else:
                 targets.append(os.path.join(os.path.expanduser("~"), ".master_adhd_data"))
 
-            # Nadpisujemy version.txt w folderze projektu aby wersja była zgodna z nowym kodem
-            try:
-                ver_file = os.path.join(base_dir, "version.txt")
-                with open(ver_file, "w", encoding="utf-8") as f:
-                    f.write(remote_ver)
-                print(f"[OTA] Nadpisano version.txt w {ver_file} z wersją {remote_ver}")
-            except Exception as ve:
-                print(f"[OTA] Błąd nadpisywania version.txt: {ve}")
-
-            # Zapisz pliki OTA dla każdej lokalizacji
+            # Zapisujemy pliki we wszystkich znanych lokalizacjach:
+            # - APP_DIR / folder danych (na Androidzie/iOS kod wbudowany jest tylko do odczytu),
+            # - folder projektu (PC),
+            # - katalogi wskazywane przez FLET_APP_STORAGE_DATA.
+            saved_dirs = []
             for target_dir in set(targets):
                 try:
                     os.makedirs(target_dir, exist_ok=True)
-                    ota_file = os.path.join(target_dir, "app_logic_ota.py")
-                    with open(ota_file, "w", encoding="utf-8") as f:
+                    with open(os.path.join(target_dir, "app_logic_ota.py"), "w", encoding="utf-8") as f:
                         f.write(new_code)
-                    ota_ver_file = os.path.join(target_dir, "ota_version.txt")
-                    with open(ota_ver_file, "w", encoding="utf-8") as f:
+                    # version.txt jest czytany jako pierwszy, ota_version.txt jako fallback.
+                    # Zapisujemy oba, aby wersja była spójna po restarcie (PC i mobile).
+                    with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
                         f.write(remote_ver)
+                    with open(os.path.join(target_dir, "ota_version.txt"), "w", encoding="utf-8") as f:
+                        f.write(remote_ver)
+                    saved_dirs.append(target_dir)
+                    print(f"[OTA] Zapisano v{remote_ver} w {target_dir}")
                 except Exception as we:
                     print(f"[OTA] Błąd zapisu w {target_dir}: {we}")
 
-            status_text.value = f"✓ Pomyślnie pobrano v{remote_ver}! Restartowanie aplikacji..."
-            page.update()
+            if not saved_dirs:
+                warning_text.value = ("⚠️ Nie udało się zapisać aktualizacji — brak uprawnień do zapisu "
+                                      "w żadnej z lokalizacji aplikacji.")
+                status_text.value = ""
+                refresh_view()
+                return
 
-            # Zamknij aplikację i uruchom nową wersję (PEŁNY RESTART - ważne po OTA update!)
-            import subprocess
-            time.sleep(1.5)  # Dłuższa pauza na zapis
-            
-            # Na PC: spróbuj uruchomić nowy proces
-            try:
-                python_path = sys.executable if hasattr(sys, "exec_prefix") else "python"
-                app_path = os.path.abspath("main.py")
-                
-                cmd = [python_path, "-m", "flet.app", app_path]
-                subprocess.run(cmd)
-            except Exception as restart_error:
-                print(f"[OTA RESTART] Próba restartu nie powiodła się: {restart_error}")
+            # ŚWIADOMIE NIE restartujemy procesu. Na Androidzie/iOS ubicie procesu
+            # (os._exit / nowy proces) kończy się crashem zamrożeniem UI, bo aplikacja
+            # nie może forknąć samej siebie jak na Windows. Nowy kod i tak wczyta
+            # main.py przy następnym starcie - wystarczy zamknąć i otworzyć aplikację.
+            status_text.value = f"✓ Pobrano v{remote_ver}. Nowa wersja aktywuje się po restarcie."
+            ota_restart_hint.value = (
+                "⚠️ WYMAGANY RĘCZNY RESTART APLIKACJI\n"
+                f"Pobrano wersję v{remote_ver}.\n"
+                "1. Zamknij aplikację (przycisk „🛑 Zamknij aplikację” poniżej lub z listy aplikacji).\n"
+                "2. Otwórz ją ponownie — nowa wersja wczyta się automatycznie."
+            )
+            refresh_view()
 
-            # Wyjście z procesu - aplikacja się zamknie i trzeba ponownie uruchomić
-            print(f"[OTA] Zakończenie aplikacji. Proszę ponownie otworzyć aplikację!")
-            os._exit(0)
+            print(f"[OTA] OK: aktualizacja v{remote_ver} pobrana i zapisana.")
+            print(f"[OTA] Zapisano w: {', '.join(saved_dirs)}")
+            print("[OTA] Zamknij i otwórz aplikację, aby aktywować nową wersję.")
         except Exception as ex:
             warning_text.value = f"⚠️ Błąd aktualizacji OTA: {ex}"
             status_text.value = ""
@@ -1282,6 +1308,7 @@ def main(page: ft.Page):
         current_view = view_name
         open_prio_task_id = None
         status_text.value = warning_text.value = ""
+        ota_restart_hint.value = ""
         refresh_view()
 
     # Reset synchronizacji przy zmianie widoku (unikamy konfliktów plików w trybie folder)
@@ -1653,6 +1680,7 @@ def main(page: ft.Page):
             content_column.controls = [
                 ft.Row([title_text, ft.Container(expand=True), sync_badge if mob else ft.Container()]),
                 status_text, warning_text,
+                ota_restart_hint,
                 card_ota,
                 card_sound,
                 card_backup,

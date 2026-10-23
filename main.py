@@ -44,22 +44,44 @@ def is_newer_version(remote_ver: str, local_ver: str) -> bool:
         return remote_ver.strip() != local_ver.strip()
 
 
+def _version_tuple(value: str):
+    """Zwraca krotkę liczb dla '1.6.14' albo None, gdy wersja jest niepoprawna."""
+    try:
+        return tuple(int(part) for part in value.strip().lstrip("vV").split("."))
+    except Exception:
+        return None
+
+
 def get_installed_ota_version() -> str:
-    """Sprawdza wersję zgodnie z priorytetem z app_logic.get_local_version()."""
+    """Zwraca najwyższą znaną wersję (wbudowaną lub pobraną przez OTA).
+
+    Bierzemy maksimum, bo na Androidzie/iOS wbudowany app_logic.py oraz jego
+    version.txt są tylko do odczytu. Porównywanie wyłącznie z wersją wbudowaną
+    powodowało ponowne pobieranie tej samej aktualizacji przy każdym starcie.
+    """
+    candidates = []
     try:
         import app_logic
-        # Używamy get_local_version() z repozytorium (priorytet) zamiast starego FALLBACK_VERSION
-        return getattr(app_logic, "APP_VERSION", "0.0.0")
+        candidates.append(getattr(app_logic, "APP_VERSION", "") or "")
     except Exception as e:
         print(f"[OTA] Błąd pobierania wersji z app_logic: {e}")
-        # Fallback do ota_version.txt (tylko jeśli nie ma kodu z repozytorium)
-        if os.path.exists(OTA_VERSION_FILE):
+
+    for path in (OTA_VERSION_FILE, os.path.join(OTA_DIR, "version.txt")):
+        if os.path.exists(path):
             try:
-                with open(OTA_VERSION_FILE, "r", encoding="utf-8") as f:
-                    return f.read().strip()
+                with open(path, "r", encoding="utf-8") as f:
+                    candidates.append(f.read().strip())
             except Exception:
                 pass
-        return "0.0.0"
+
+    best = (0, 0, 0)
+    best_raw = "0.0.0"
+    for candidate in candidates:
+        parsed = _version_tuple(candidate) if candidate else None
+        if parsed and parsed > best:
+            best = parsed
+            best_raw = candidate.strip().lstrip("vV")
+    return best_raw
 
 
 def check_and_download_ota(force=False, status_cb=None) -> tuple[bool, str]:
@@ -172,7 +194,11 @@ def load_and_run(page: ft.Page):
         
         # PRIORITY: OTA cache > Folder data > Wbudowany kod
         target_ota = None
-        
+        # UWAGA: base_env MUSI być zdefiniowane przed użyciem w fallbacku niżej.
+        # Wcześniej ta zmienna nie istniała -> NameError przy każdym starcie bez
+        # świeżej aktualizacji -> kasowanie pobranego kodu i ekran błędu na mobile.
+        base_env = os.environ.get("FLET_APP_STORAGE_DATA", "")
+
         # Spróbuj najpierw z repozytorium (aktualny kod z GitHub)
         if updated and os.path.exists(OTA_LOGIC_FILE):
             print(f"[OTA] Priorytet 1: Ładowanie z OTA cache {OTA_LOGIC_FILE}")
