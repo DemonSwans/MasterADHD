@@ -1576,7 +1576,7 @@ def main(page: ft.Page):
             )
 
             card_ota = ft.Container(
-                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(2, "#30363d"), border_radius=12, padding=14,
                 content=ft.Column([
                     ft.Row([
                         ft.Icon(ft.Icons.SYSTEM_UPDATE_ALT, size=18, color=COLOR_PRIO_B),
@@ -1584,7 +1584,7 @@ def main(page: ft.Page):
                     ], spacing=8),
                     ft.Text(f"Wersja wbudowana: v{APP_VERSION} | Aktywna: v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
                     ft.Row([
-                        ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                        ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE,
                                   on_click=trigger_manual_ota),
                         ft.Container(expand=True),
                         ft.Button("🛑 Zamknij aplikację (Wymuś restart)", bgcolor="#ef444422", color=COLOR_PRIO_A,
@@ -1646,6 +1646,9 @@ def main(page: ft.Page):
                 ], spacing=10)
             )
 
+            # Czyszczenie kontenera przed dodaniem kart ustawień (unikamy gromadzenia starej zawartości)
+            content_column.controls.clear()
+            
             content_column.controls = [
                 ft.Row([title_text, ft.Container(expand=True), sync_badge if mob else ft.Container()]),
                 status_text, warning_text,
