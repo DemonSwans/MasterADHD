@@ -1,11 +1,13 @@
 import base64
+import contextlib
 import importlib.util
 import json
+import logging
+import logging.handlers
 import os
 import shutil
 import sqlite3
 import ssl
-import subprocess
 import sys
 import threading
 import time
@@ -14,10 +16,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 import flet as ft
 
 FALLBACK_VERSION = "1.6.9"
-
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
 def get_app_dir():
@@ -33,6 +35,51 @@ def get_app_dir():
 APP_DIR = get_app_dir()
 LOCAL_DB = os.path.join(APP_DIR, "tasks.db")
 CONFIG_DB = os.path.join(APP_DIR, "app_config.db")
+LOG_FILE = os.path.join(APP_DIR, "master_adhd.log")
+
+DB_BUSY_TIMEOUT_MS = 5000
+SNAPSHOT_LIMIT = 10
+ARCHIVE_LIMIT = 2000
+SYNC_DEBOUNCE_SECONDS = 1.5
+
+# Jeden zamek na całą bazę. SQLite i tak serializuje zapisy, a dzięki temu
+# wątek synchronizacji nie walczy z UI o plik (koniec "database is locked").
+DB_WRITE_LOCK = threading.RLock()
+
+
+# --- LOGOWANIE DO PLIKU (na telefonie print() przepada) ---
+def _setup_logging():
+    logger = logging.getLogger("master_adhd")
+    if getattr(logger, "_master_configured", False):
+        return logger
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(handler)
+    except Exception:
+        pass
+    logger._master_configured = True
+    return logger
+
+
+LOG = _setup_logging()
+
+
+def export_logs():
+    """Kopiuje aktualny log do pliku z datą (do wysłania/obejrzenia)."""
+    try:
+        if not os.path.exists(LOG_FILE):
+            return False, "Brak pliku logów — aplikacja nie zapisała jeszcze żadnego wpisu."
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = os.path.join(APP_DIR, f"master_adhd_log_{ts}.txt")
+        shutil.copy2(LOG_FILE, target)
+        return True, target
+    except Exception as e:
+        return False, f"Błąd eksportu logów: {e}"
 
 
 def is_newer_version(remote_ver: str, local_ver: str) -> bool:
@@ -45,14 +92,28 @@ def is_newer_version(remote_ver: str, local_ver: str) -> bool:
 
 
 # --- ODCZYT WERSJI ---
+def get_bundled_version():
+    """Wersja plików wbudowanych w aplikację (niezmieniana przez OTA)."""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        for name in ("version.txt", "ota_version.txt"):
+            path = os.path.join(base_dir, name)
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    val = f.read().strip()
+                if val:
+                    return val
+    except Exception:
+        pass
+    return FALLBACK_VERSION
+
+
 def get_local_version():
     """Zwraca najwyższą znaną wersję lokalną.
 
     Bierzemy maksimum ze wszystkich możliwych źródeł, bo na Androidzie/iOS
     pliki wbudowane w aplikację są tylko do odczytu i pozostają na starej
     wersji, a nowy kod leży w folderze danych (~/.master_adhd_data).
-    Wcześniejsza wersja funkcji zwracała pierwszą napotkaną wartość, przez
-    co po aktualizacji OTA aplikacja dalej pokazywała starą wersję.
     """
     candidates = []
     try:
@@ -92,30 +153,295 @@ def get_ssl_context():
             return None
 
 
+# --- POŁĄCZENIA Z BAZĄ ---
+@contextlib.contextmanager
+def db_connection(db_path=None, write=False):
+    """Połączenie SQLite z busy_timeout, poprawnym commit/rollback i zamykaniem.
+
+    `with sqlite3.connect(...)` NIE zamyka połączenia — tylko commituje, przez co
+    na Windows pliki zostawały zablokowane, a na telefonie narastały otwarte
+    handle'e. Tutaj połączenie jest zawsze zamykane.
+    """
+    path = db_path or LOCAL_DB
+    with DB_WRITE_LOCK:
+        conn = None
+        try:
+            conn = sqlite3.connect(path, timeout=DB_BUSY_TIMEOUT_MS / 1000.0)
+            conn.execute(f"PRAGMA busy_timeout={DB_BUSY_TIMEOUT_MS}")
+            yield conn
+            conn.commit()
+            if write and os.path.abspath(path) == os.path.abspath(LOCAL_DB):
+                _touch_db_change()
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def _touch_db_change():
+    """Znacznik ostatniej zmiany danych — używany do wykrywania starszej chmury."""
+    try:
+        conn = sqlite3.connect(CONFIG_DB, timeout=5)
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            row = conn.execute("SELECT value FROM config WHERE key = 'db_change_seq'").fetchone()
+            seq = int(row[0]) + 1 if row and row[0] else 1
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ("db_change_seq", str(seq)))
+            conn.execute(
+                "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                ("db_last_change", datetime.now().isoformat(timespec="seconds")),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 # --- KONFIGURACJA LOKALNA ---
 def init_config_db():
-    with sqlite3.connect(CONFIG_DB) as conn:
+    with db_connection(CONFIG_DB) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)")
 
 
 def get_config(key, default=""):
-    with sqlite3.connect(CONFIG_DB) as conn:
-        res = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
-        return res[0] if res else default
+    try:
+        with db_connection(CONFIG_DB) as conn:
+            res = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+            return res[0] if res else default
+    except Exception:
+        return default
 
 
 def set_config(key, value):
-    with sqlite3.connect(CONFIG_DB) as conn:
+    with db_connection(CONFIG_DB) as conn:
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
+
+
+# --- INTEGRALNOŚĆ I KOPIE BAZY ---
+def check_db_integrity(db_path=None):
+    """Sprawdza, czy plik jest poprawną bazą SQLite (nie tylko nagłówek)."""
+    path = db_path or LOCAL_DB
+    if not os.path.exists(path):
+        return False, "Brak pliku bazy"
+    conn = None
+    try:
+        conn = sqlite3.connect(path, timeout=DB_BUSY_TIMEOUT_MS / 1000.0)
+        conn.execute(f"PRAGMA busy_timeout={DB_BUSY_TIMEOUT_MS}")
+        row = conn.execute("PRAGMA quick_check").fetchone()
+        status = (row[0] if row else "").strip()
+        if status.lower() == "ok":
+            return True, "ok"
+        return False, status or "nieznany błąd integralności"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _validate_sqlite_bytes(data):
+    """Waliduje pobrane bajty bazy przez zapis do pliku tymczasowego."""
+    if not data or not data.startswith(b"SQLite format 3"):
+        return False, "to nie jest plik SQLite"
+    tmp_dir = os.path.dirname(os.path.abspath(LOCAL_DB)) or APP_DIR
+    tmp_path = os.path.join(tmp_dir, ".validate_download.db")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        return check_db_integrity(tmp_path)
+    except Exception as e:
+        return False, str(e)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+def backup_database(dest_path, source_path=None):
+    """Tworzy spójną kopię bazy przez API SQLite (bezpieczne dla WAL).
+
+    `shutil.copy2` kopiuje tylko plik główny i gubi transakcje z pliku -wal,
+    przez co do chmury/snapshotu mogły trafiać niepełne dane.
+    """
+    src_path = source_path or LOCAL_DB
+    with DB_WRITE_LOCK:
+        if not os.path.exists(src_path):
+            return False, "Brak źródłowej bazy"
+        tmp_path = dest_path + ".tmp"
+        try:
+            src = sqlite3.connect(src_path, timeout=DB_BUSY_TIMEOUT_MS / 1000.0)
+            try:
+                src.execute(f"PRAGMA busy_timeout={DB_BUSY_TIMEOUT_MS}")
+                try:
+                    src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.Error:
+                    pass
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+                dest = sqlite3.connect(tmp_path)
+                try:
+                    src.backup(dest)
+                finally:
+                    dest.close()
+            finally:
+                src.close()
+            os.replace(tmp_path, dest_path)
+            return True, dest_path
+        except Exception as e:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            return False, str(e)
+
+
+def get_snapshot_dir():
+    base = os.path.dirname(os.path.abspath(LOCAL_DB)) or APP_DIR
+    path = os.path.join(base, "snapshots")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def list_snapshots():
+    """Lista snapshotów, najnowsze najpierw (po czasie modyfikacji, nie po nazwie)."""
+    try:
+        folder = get_snapshot_dir()
+        files = [f for f in os.listdir(folder) if f.startswith("tasks_") and f.endswith(".db")]
+        # Nazwa zawiera tag (pre_pull, pre_end_of_day...), więc sortowanie po nazwie
+        # mieszało czasy. Liczy się data modyfikacji pliku.
+        files.sort(
+            key=lambda f: (os.path.getmtime(os.path.join(folder, f)), f),
+            reverse=True,
+        )
+        return [os.path.join(folder, f) for f in files]
+    except Exception:
+        return []
+
+
+def prune_snapshots(keep=SNAPSHOT_LIMIT):
+    try:
+        snaps = list_snapshots()
+        for old in snaps[keep:]:
+            try:
+                os.remove(old)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def make_local_snapshot(tag="pre_sync"):
+    """Snapshot z rotacją (nie jest już kasowany przy zamykaniu aplikacji)."""
+    if not os.path.exists(LOCAL_DB):
+        return False, "Brak bazy lokalnej"
+    try:
+        folder = get_snapshot_dir()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        target = os.path.join(folder, f"tasks_{tag}_{ts}.db")
+        ok, msg = backup_database(target)
+        if ok:
+            prune_snapshots()
+            return True, target
+        return False, msg
+    except Exception as e:
+        return False, str(e)
+
+
+def restore_pre_sync_backup(snapshot_path=None):
+    """Przywraca najnowszy (lub wskazany) snapshot bezpieczeństwa."""
+    snaps = list_snapshots()
+    target = snapshot_path or (snaps[0] if snaps else None)
+    if not target or not os.path.exists(target):
+        return False, "Brak zapisanego snapshotu bezpieczeństwa"
+    if os.path.exists(LOCAL_DB):
+        make_local_snapshot("pre_restore")
+    ok, msg = backup_database(LOCAL_DB, source_path=target)
+    if ok:
+        LOG.info("Przywrócono snapshot: %s", target)
+        push_database_async()
+        return True, f"Przywrócono kopię: {os.path.basename(target)}"
+    return False, f"Błąd przywracania: {msg}"
+
+
+def restore_snapshot_file(path):
+    return restore_pre_sync_backup(path)
+
+
+def ensure_db_health():
+    """Sprawdza bazę na starcie; przy uszkodzeniu odkłada plik i przywraca snapshot."""
+    if not os.path.exists(LOCAL_DB):
+        return True, "Nowa baza"
+    ok, status = check_db_integrity(LOCAL_DB)
+    if ok:
+        return True, "ok"
+    LOG.error("Uszkodzona baza: %s", status)
+    try:
+        corrupt_path = LOCAL_DB + ".corrupt_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.replace(LOCAL_DB, corrupt_path)
+        for suffix in ("-wal", "-shm"):
+            p = LOCAL_DB + suffix
+            if os.path.exists(p):
+                os.remove(p)
+        snaps = list_snapshots()
+        if snaps:
+            restored, msg = backup_database(LOCAL_DB, source_path=snaps[0])
+            if restored:
+                return True, f"Baza była uszkodzona — przywrócono {os.path.basename(snaps[0])}"
+        return False, f"Baza była uszkodzona ({status}), brak snapshotu do przywrócenia"
+    except Exception as e:
+        return False, f"Baza była uszkodzona, nie udało się jej odłożyć: {e}"
 
 
 # --- SYNCHRONIZACJA (Chmura Gist / HA / Folder) ---
 def is_valid_sqlite(file_data):
-    return file_data.startswith(b"SQLite format 3")
+    return bool(file_data) and file_data.startswith(b"SQLite format 3")
 
 
-def pull_database():
+def _read_remote_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _restore_db_from_bytes(data, label="pobraną bazę"):
+    """Podmienia lokalną bazę na pobrane bajty (przez API SQLite, bez WAL-śmieci)."""
+    ok, status = _validate_sqlite_bytes(data)
+    if not ok:
+        return False, f"Odrzucono: {label} jest uszkodzona ({status})"
+    tmp_dir = os.path.dirname(os.path.abspath(LOCAL_DB)) or APP_DIR
+    tmp_path = os.path.join(tmp_dir, ".download_restore.db")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        backup_database(LOCAL_DB, source_path=tmp_path)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+    return True, "ok"
+
+
+def pull_database(force=False):
+    """Pobiera bazę z chmury/dysku.
+
+    `force=False` (start aplikacji) NIE nadpisuje nowszych danych lokalnych.
+    `force=True` (ręczna synchronizacja) pobiera zawsze.
+    """
     mode = get_config("sync_mode", "none")
 
     if mode == "gist":
@@ -140,14 +466,32 @@ def pull_database():
                     data = json.loads(resp.read().decode("utf-8"))
                     files = data.get("files", {})
                     if "tasks.db.b64" in files:
+                        remote_ts = ""
+                        backup_file = files.get("backup_tasks.json") or {}
+                        content = backup_file.get("content") or ""
+                        if content:
+                            try:
+                                remote_ts = json.loads(content).get("exported_at", "") or ""
+                            except Exception:
+                                remote_ts = ""
+                        if not force:
+                            local_ts = get_config("db_last_change", "")
+                            if remote_ts and local_ts and remote_ts < local_ts:
+                                return True, "Chmura jest starsza niż dane lokalne — pominięto pobieranie"
+
                         b64_content = files["tasks.db.b64"].get("content", "")
                         raw_db = base64.b64decode(b64_content.encode("utf-8"))
-                        if is_valid_sqlite(raw_db):
-                            make_local_snapshot()
-                            with open(LOCAL_DB, "wb") as f:
-                                f.write(raw_db)
-                            return True, "Pobrano bazę z Chmury"
-                        return False, "Odrzucono: Plik w chmurze jest uszkodzony"
+                        if not is_valid_sqlite(raw_db):
+                            return False, "Odrzucono: Plik w chmurze jest uszkodzony"
+                        make_local_snapshot("pre_pull")
+                        ok, msg = _restore_db_from_bytes(raw_db, "baza w chmurze")
+                        if not ok:
+                            return False, msg
+                        # Po pobraniu lokalny znacznik czasu = czas chmury, więc
+                        # kolejny start nie pobiera w kółko tych samych danych.
+                        if remote_ts:
+                            set_config("db_last_change", remote_ts)
+                        return True, "Pobrano bazę z Chmury"
                     return True, "Chmura gotowa"
         except urllib.error.HTTPError as e:
             if e.code == 404:
@@ -156,59 +500,104 @@ def pull_database():
                 return False, "Nieprawidłowy Token GitHub!"
             return False, f"Błąd chmury: {e.code}"
         except Exception as e:
+            LOG.warning("Pull gist: %s", e)
             return False, f"Brak połączenia z chmurą: {e}"
 
     elif mode == "ha_server":
         url = get_config("ha_url", "").strip().rstrip("/")
-        if not url: 
-            print("[SYNC] Błąd: Brak adresu serwera HA")
+        if not url:
+            LOG.warning("Brak adresu serwera HA")
             return False, "Brak adresu serwera HA"
         try:
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=4) as resp:
                 if resp.status == 200:
                     data = resp.read()
-                    if is_valid_sqlite(data):
-                        make_local_snapshot()
-                        with open(LOCAL_DB, "wb") as f: 
-                            f.write(data)
-                        return True, "Pobrano bazę z serwera HA"
-                    return False, "Odrzucono: Pobrany plik to nie baza"
+                    if not is_valid_sqlite(data):
+                        return False, "Odrzucono: Pobrany plik to nie baza"
+                    # Serwer HA nie ma metadanych w treści, ale zwykle wysyła
+                    # Last-Modified — nie pozwalamy starszym danym nadpisać lokalnych.
+                    last_modified = ""
+                    remote_dt = None
+                    try:
+                        last_modified = resp.headers.get("Last-Modified", "") or ""
+                    except Exception:
+                        last_modified = ""
+                    if last_modified:
+                        try:
+                            remote_dt = parsedate_to_datetime(last_modified)
+                            if remote_dt.tzinfo is not None:
+                                remote_dt = remote_dt.astimezone().replace(tzinfo=None)
+                        except Exception:
+                            remote_dt = None
+                    if not force and remote_dt is not None:
+                        local_ts = get_config("db_last_change", "")
+                        if local_ts:
+                            try:
+                                if remote_dt < datetime.fromisoformat(local_ts):
+                                    return True, "Serwer HA ma starsze dane — pominięto pobieranie"
+                            except Exception:
+                                pass
+                    make_local_snapshot("pre_pull")
+                    ok, msg = _restore_db_from_bytes(data, "baza z serwera HA")
+                    if not ok:
+                        return False, msg
+                    # Znacznik czasu = czas serwera, żeby nie pobierać w kółko tego samego.
+                    set_config(
+                        "db_last_change",
+                        (remote_dt or datetime.now()).isoformat(timespec="seconds"),
+                    )
+                    return True, "Pobrano bazę z serwera HA"
         except urllib.error.HTTPError as e:
-            print(f"[SYNC] HTTP Error {e.code} do HA: {e.reason}")
+            LOG.warning("HTTP %s z HA: %s", e.code, e.reason)
             return False, f"Błąd serwera (kod {e.code}): Nie udało się połączyć z serwerem."
         except Exception as e:
-            print(f"[SYNC] Błąd połączenia z HA: {e}")
+            LOG.warning("Błąd połączenia z HA: %s", e)
             return False, f"Brak połączenia z HA: {e}"
 
     elif mode == "folder":
         folder = get_config("sync_folder", "").strip()
-        if not folder: 
-            print("[SYNC] Błąd: Nie podano ścieżki do folderu!")
+        if not folder:
+            LOG.warning("Nie podano ścieżki do folderu")
             return False, "Nie podano ścieżki do folderu!"
-        if not os.path.exists(folder): 
-            print(f"[SYNC] Błąd: Folder '{folder}' nie istnieje!")
+        if not os.path.exists(folder):
+            LOG.warning("Folder %s nie istnieje", folder)
             return False, "Podany folder nie istnieje na dysku!"
 
         remote_file = os.path.join(folder, "tasks.db")
         if os.path.exists(remote_file):
             try:
-                with open(remote_file, "rb") as f:
-                    data = f.read()
-                if is_valid_sqlite(data):
-                    make_local_snapshot()
-                    shutil.copy2(remote_file, LOCAL_DB)
-                    return True, "Pobrano bazę z folderu"
-                return False, "Odrzucono: Plik uszkodzony"
+                if not force:
+                    last_push = get_config("folder_push_mtime", "")
+                    remote_mtime = os.path.getmtime(remote_file)
+                    if last_push:
+                        try:
+                            if abs(remote_mtime - float(last_push)) < 1.0:
+                                return True, "Baza już zsynchronizowana z folderem"
+                        except ValueError:
+                            pass
+                    if os.path.exists(LOCAL_DB) and remote_mtime <= os.path.getmtime(LOCAL_DB):
+                        return True, "Baza lokalna jest nowsza — pominięto pobieranie"
+
+                data = _read_remote_bytes(remote_file)
+                if not is_valid_sqlite(data):
+                    return False, "Odrzucono: Plik jest uszkodzony (to nie baza SQLite)"
+                ok, status = _validate_sqlite_bytes(data)
+                if not ok:
+                    return False, f"Odrzucono: Plik jest uszkodzony ({status})"
+                make_local_snapshot("pre_pull")
+                backup_database(LOCAL_DB, source_path=remote_file)
+                set_config("folder_push_mtime", str(os.path.getmtime(remote_file)))
+                return True, "Pobrano bazę z folderu"
             except Exception as e:
-                print(f"[SYNC] Błąd odczytu z folderu: {e}")
+                LOG.warning("Błąd odczytu z folderu: %s", e)
                 return False, f"Błąd odczytu z dysku: {e}"
         return True, "Folder gotowy"
     return True, "Tryb lokalny"
 
 
 def push_database():
-    """Synchroniczny zapis (używany w testach oraz przy pierwszym łączeniu w ustawieniach)."""
+    """Synchroniczny zapis (używany w testach oraz przy pierwszym łączeniu)."""
     mode = get_config("sync_mode", "none")
     if mode == "none" or not os.path.exists(LOCAL_DB):
         return True, ""
@@ -218,10 +607,14 @@ def push_database():
         gist_id = get_config("gist_id", "").strip()
         if not token:
             return False, "Brak Tokenu GitHub"
+        upload_path = os.path.join(os.path.dirname(os.path.abspath(LOCAL_DB)), ".sync_upload.db")
         try:
-            with open(LOCAL_DB, "rb") as f:
+            ok, msg = backup_database(upload_path)
+            if not ok:
+                return False, f"Nie udało się przygotować kopii: {msg}"
+            with open(upload_path, "rb") as f:
                 b64_str = base64.b64encode(f.read()).decode("utf-8")
-            
+
             # Podwójny backup: baza SQLite oraz czytelny dla człowieka plik JSON w tym samym Giście!
             json_backup_str = json.dumps(export_database_to_json_dict(), ensure_ascii=False, indent=2)
 
@@ -252,68 +645,207 @@ def push_database():
                     res_data = json.loads(resp.read().decode("utf-8"))
                     if not gist_id and "id" in res_data:
                         set_config("gist_id", res_data["id"])
+                    set_config("last_push_at", datetime.now().isoformat(timespec="seconds"))
                     return True, "Zapisano w Chmurze"
         except Exception as e:
+            LOG.warning("Push gist: %s", e)
             return False, f"Błąd zapisu w chmurze: {e}"
+        finally:
+            try:
+                if os.path.exists(upload_path):
+                    os.remove(upload_path)
+            except Exception:
+                pass
 
     elif mode == "ha_server":
         url = get_config("ha_url", "").strip().rstrip("/")
-        if not url: return False, "Brak adresu"
+        if not url:
+            return False, "Brak adresu"
+        upload_path = os.path.join(os.path.dirname(os.path.abspath(LOCAL_DB)), ".sync_upload.db")
         try:
-            with open(LOCAL_DB, "rb") as f:
+            ok, msg = backup_database(upload_path)
+            if not ok:
+                return False, f"Nie udało się przygotować kopii: {msg}"
+            with open(upload_path, "rb") as f:
                 data = f.read()
             req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/octet-stream"},
                                          method="POST")
             with urllib.request.urlopen(req, timeout=4) as resp:
-                if resp.status == 200: return True, "Zapisano na serwerze HA"
+                if resp.status == 200:
+                    set_config("last_push_at", datetime.now().isoformat(timespec="seconds"))
+                    return True, "Zapisano na serwerze HA"
         except Exception as e:
+            LOG.warning("Push HA: %s", e)
             return False, f"Błąd wysyłania: {e}"
+        finally:
+            try:
+                if os.path.exists(upload_path):
+                    os.remove(upload_path)
+            except Exception:
+                pass
 
     elif mode == "folder":
         folder = get_config("sync_folder", "").strip()
-        if not folder or not os.path.exists(folder): return False, "Folder nie istnieje"
+        if not folder or not os.path.exists(folder):
+            return False, "Folder nie istnieje"
         try:
             archive_dir = os.path.join(folder, "archive")
             os.makedirs(archive_dir, exist_ok=True)
             remote_file = os.path.join(folder, "tasks.db")
             if os.path.exists(remote_file):
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                shutil.copy2(remote_file, os.path.join(archive_dir, f"tasks_{ts}.db"))
+                backup_database(os.path.join(archive_dir, f"tasks_{ts}.db"), source_path=remote_file)
                 backups = sorted([os.path.join(archive_dir, f) for f in os.listdir(archive_dir) if f.endswith(".db")])
-                while len(backups) > 25: os.remove(backups.pop(0))
-            shutil.copy2(LOCAL_DB, remote_file)
+                while len(backups) > 25:
+                    try:
+                        os.remove(backups.pop(0))
+                    except Exception:
+                        break
+            ok, msg = backup_database(remote_file)
+            if not ok:
+                return False, f"Błąd zapisu: {msg}"
+            try:
+                set_config("folder_push_mtime", str(os.path.getmtime(remote_file)))
+            except Exception:
+                pass
+            set_config("last_push_at", datetime.now().isoformat(timespec="seconds"))
             return True, "Zaktualizowano na Dysku"
         except Exception as e:
+            LOG.warning("Push folder: %s", e)
             return False, f"Błąd zapisu: {e}"
     return True, ""
 
 
+# --- KOLEJKA ZAPISU (debounce + jeden wątek) ---
+SYNC_STATE = {"status": "idle", "message": "", "updated_at": None}
+_SYNC_EVENT = threading.Event()
+_SYNC_IDLE = threading.Event()
+_SYNC_IDLE.set()
+_SYNC_PENDING = threading.Event()
+# Startowy pull trwa — nie pozwalamy w tym czasie wysłać (pustej) bazy do chmury.
+_STARTUP_PULL_ACTIVE = threading.Event()
+_PUSH_DEFERRED = threading.Event()
+_SYNC_THREAD = None
+_SYNC_THREAD_LOCK = threading.Lock()
+_SYNC_STATUS_CALLBACK = None
+
+
+def register_sync_status_callback(cb):
+    global _SYNC_STATUS_CALLBACK
+    _SYNC_STATUS_CALLBACK = cb
+
+
+def get_sync_state():
+    return dict(SYNC_STATE)
+
+
+def set_sync_status(status, message=""):
+    SYNC_STATE["status"] = status
+    SYNC_STATE["message"] = message
+    SYNC_STATE["updated_at"] = datetime.now()
+    cb = _SYNC_STATUS_CALLBACK
+    if cb:
+        try:
+            cb(get_sync_state())
+        except Exception:
+            pass
+
+
+def _ensure_sync_worker():
+    global _SYNC_THREAD
+    with _SYNC_THREAD_LOCK:
+        if _SYNC_THREAD is not None and _SYNC_THREAD.is_alive():
+            return
+        _SYNC_THREAD = threading.Thread(target=_sync_worker, name="master-adhd-sync", daemon=True)
+        _SYNC_THREAD.start()
+
+
+def _sync_worker():
+    while True:
+        _SYNC_EVENT.wait()
+        # Debounce: czekamy aż użytkownik przestanie klikać (mniej zapisów, mniej limitów API).
+        while True:
+            _SYNC_EVENT.clear()
+            time.sleep(SYNC_DEBOUNCE_SECONDS)
+            if not _SYNC_EVENT.is_set():
+                break
+        _SYNC_IDLE.clear()
+        try:
+            if get_config("sync_mode", "none") != "none":
+                set_sync_status("syncing", "Zapisywanie...")
+                ok, msg = push_database()
+                if ok:
+                    set_sync_status("ok", msg or "Zapisano")
+                else:
+                    set_sync_status("error", msg)
+                    LOG.error("Synchronizacja nieudana: %s", msg)
+        except Exception as e:
+            set_sync_status("error", str(e))
+            LOG.exception("Błąd wątku synchronizacji")
+        finally:
+            # Jeśli w trakcie zapisu przyszło nowe żądanie, zostawiamy pending.
+            if not _SYNC_EVENT.is_set():
+                _SYNC_PENDING.clear()
+            _SYNC_IDLE.set()
+
+
+def flush_pending_sync(timeout=3.0):
+    """Dopina zaległy zapis (wywoływane przy zamykaniu aplikacji).
+
+    Czekamy także na zapis, który jest jeszcze w fazie debounce — samo
+    `_SYNC_IDLE` było ustawione i zamykanie gubiło ostatnią zmianę.
+    """
+    try:
+        if _SYNC_THREAD is None or not _SYNC_THREAD.is_alive():
+            return
+        deadline = time.time() + max(0.0, timeout)
+        while time.time() < deadline:
+            if not _SYNC_PENDING.is_set() and _SYNC_IDLE.is_set():
+                return
+            time.sleep(0.1)
+    except Exception:
+        pass
+
+
 def push_database_async():
-    """Szybki, nieblokujący zapis w tle dla płynnego działania interfejsu."""
+    """Nieblokujący zapis: folder = szybki zapis lokalny, sieć = kolejka z debounce."""
     mode = get_config("sync_mode", "none")
     if mode == "none":
         return
-    
+    # Najpierw musimy wiedzieć, co jest w chmurze — inaczej świeżo utworzona
+    # pusta baza nadpisałaby dane, które właśnie się pobierają.
+    if _STARTUP_PULL_ACTIVE.is_set():
+        _PUSH_DEFERRED.set()
+        return
     try:
         if mode == "folder":
-            # Tryb folder - synchroniczny z pauzą, żeby uniknąć konfliktów plików i zapewnić niezawodność na urządzeniach mobilnych
-            push_database()
-            # Krótka pauza po zakończeniu zapisu aby system zdążył pisać na dysk (szczególnie ważne dla SSD/USB w telefonach)
-            time.sleep(0.1)
-        else:
-            # Tryb GitHub/HA - asynchroniczny dla płynności UI, z pauzą po starcie wątku
-            thread = threading.Thread(target=push_database, daemon=True)
-            thread.start()
-            time.sleep(0.1)
+            ok, msg = push_database()
+            set_sync_status("ok" if ok else "error", msg or "Zapisano na dysku")
+            if not ok:
+                LOG.error("Zapis na dysk nieudany: %s", msg)
+            return
+        _ensure_sync_worker()
+        _SYNC_PENDING.set()
+        _SYNC_EVENT.set()
     except Exception as e:
-        print(f"[SYNC] Błąd w trybie {mode}: {e}")
+        LOG.warning("Błąd w trybie %s: %s", mode, e)
+
+
+def reset_sync_on_exit():
+    """Dopina zaległy zapis. Snapshoty zostają (rotacja), nie są już kasowane."""
+    flush_pending_sync(timeout=4.0)
+    LOG.info("Zamknięcie aplikacji — snapshoty zachowane")
 
 
 # --- BAZA DANYCH I LOGIKA ---
 def init_db():
     init_config_db()
-    pull_database()
-    with sqlite3.connect(LOCAL_DB) as conn:
+    ok, msg = ensure_db_health()
+    if not ok:
+        LOG.error("Zdrowie bazy: %s", msg)
+    # write=False: samo tworzenie schematu nie jest zmianą danych i nie może
+    # przesuwać db_last_change (inaczej start aplikacji blokowałby pull z chmury).
+    with db_connection() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
                      CREATE TABLE IF NOT EXISTS tasks
@@ -366,54 +898,23 @@ def init_db():
                      """)
 
 
-def make_local_snapshot():
-    """Tworzy lokalną kopię zapasową bazy tuż przed jakąkolwiek operacją synchronizacji."""
-    if os.path.exists(LOCAL_DB):
-        try:
-            snapshot_path = os.path.join(APP_DIR, "tasks_pre_sync_backup.db")
-            shutil.copy2(LOCAL_DB, snapshot_path)
-            return True, snapshot_path
-        except Exception as e:
-            return False, str(e)
-    return False, "Brak bazy lokalnej"
-
-
-def reset_sync_on_exit():
-    """Resetuje stan synchronizacji przy wyjściu z aplikacji."""
-    try:
-        # Usuń snapshot po zakończeniu pracy aby nie blokować plików
-        snapshot_path = os.path.join(APP_DIR, "tasks_pre_sync_backup.db")
-        if os.path.exists(snapshot_path):
-            os.remove(snapshot_path)
-    except Exception:
-        pass
-
-
-def restore_pre_sync_backup():
-    """Przywraca lokalną bazę ze snapshotu wykonanego przed ostatnią synchronizacją."""
-    snapshot_path = os.path.join(APP_DIR, "tasks_pre_sync_backup.db")
-    if os.path.exists(snapshot_path):
-        try:
-            shutil.copy2(snapshot_path, LOCAL_DB)
-            return True, "Pomyślnie przywrócono kopię sprzed synchronizacji"
-        except Exception as e:
-            return False, f"Błąd przywracania: {e}"
-    return False, "Brak zapisanego snapshotu bezpieczeństwa"
-
-
 def export_database_to_json_dict():
     """Eksportuje całą zawartość bazy (zadania, rutyny, archiwum) do słownika JSON."""
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection() as conn:
         tasks_rows = conn.execute("SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks").fetchall()
         tasks = []
         for r in tasks_rows:
+            try:
+                subs = json.loads(r[5] if r[5] else "[]")
+            except Exception:
+                subs = []
             tasks.append({
                 "id": r[0],
                 "title": r[1],
                 "is_daily": r[2],
                 "is_done": r[3],
                 "priority": r[4],
-                "subtasks": json.loads(r[5] if r[5] else "[]"),
+                "subtasks": subs,
                 "category": r[6] if len(r) > 6 and r[6] else "Ogólne"
             })
         routines_rows = conn.execute("SELECT id, title, is_done FROM routines").fetchall()
@@ -422,7 +923,7 @@ def export_database_to_json_dict():
         archive = [{"id": r[0], "title": r[1], "priority": r[2], "completed_at": r[3]} for r in archive_rows]
         return {
             "version": get_local_version(),
-            "exported_at": datetime.now().isoformat(),
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
             "tasks": tasks,
             "routines": routines,
             "completed_archive": archive
@@ -442,9 +943,21 @@ def export_database_to_json_file():
         return False, str(e)
 
 
+def latest_json_backup():
+    try:
+        files = [f for f in os.listdir(APP_DIR) if f.startswith("master_adhd_backup_") and f.endswith(".json")]
+        if not files:
+            return ""
+        files.sort(reverse=True)
+        return os.path.join(APP_DIR, files[0])
+    except Exception:
+        return ""
+
+
 def import_database_from_json_dict(data, replace_existing=False):
     """Importuje zadania, rutyny i archiwum ze słownika JSON do SQLite."""
-    with sqlite3.connect(LOCAL_DB) as conn:
+    make_local_snapshot("pre_import")
+    with db_connection(write=True) as conn:
         if replace_existing:
             conn.execute("DELETE FROM tasks")
             conn.execute("DELETE FROM routines")
@@ -454,7 +967,8 @@ def import_database_from_json_dict(data, replace_existing=False):
             conn.execute(
                 "INSERT INTO tasks (title, is_daily, is_done, priority, subtasks, category) VALUES (?, ?, ?, ?, ?, ?)",
                 (t.get("title", ""), int(t.get("is_daily", 0)), int(t.get("is_done", 0)),
-                 t.get("priority", "B"), json.dumps(t.get("subtasks", [])), t.get("category", "Ogólne"))
+                 t.get("priority", "B"), json.dumps(t.get("subtasks", []), ensure_ascii=False),
+                 t.get("category", "Ogólne"))
             )
         for r in data.get("routines", []):
             conn.execute(
@@ -470,8 +984,37 @@ def import_database_from_json_dict(data, replace_existing=False):
     return True, "Pomyślnie zaimportowano dane z JSON"
 
 
+def import_database_from_json_file(path, replace_existing=False):
+    if not path or not os.path.exists(path):
+        return False, "Nie znaleziono pliku JSON"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        return False, f"Nie udało się odczytać JSON: {e}"
+    return import_database_from_json_dict(data, replace_existing=replace_existing)
+
+
+def get_all_categories(base=None):
+    """Strefy bazowe + kategorie już istniejące w bazie (nic nie ginie przy edycji)."""
+    cats = list(base or [])
+    if "Ogólne" not in cats:
+        cats.insert(0, "Ogólne")
+    try:
+        with db_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT category FROM tasks WHERE category IS NOT NULL AND TRIM(category) != ''"
+            ).fetchall()
+        for (cat,) in rows:
+            if cat and cat not in cats:
+                cats.append(cat)
+    except Exception:
+        pass
+    return cats
+
+
 def play_sound_feedback(sound_type="task_done"):
-    """Odtwarza satysfakcjonujący dźwięk sukcesu lub powiadomienia w osobnym wątku."""
+    """Odtwarza dźwięk w osobnym wątku (systemowy tylko na Windows)."""
     sound_enabled = get_config("sound_enabled", "1") == "1"
     if not sound_enabled:
         return
@@ -487,6 +1030,9 @@ def play_sound_feedback(sound_type="task_done"):
                 else:
                     winsound.Beep(659, 80)
                     winsound.Beep(880, 120)
+            else:
+                # Android/iOS: brak modułu dźwiękowego w Flet — nie udajemy, że gra.
+                LOG.debug("Dźwięk %s pominięty na platformie %s", sound_type, sys.platform)
         except Exception:
             pass
 
@@ -494,147 +1040,165 @@ def play_sound_feedback(sound_type="task_done"):
 
 
 def get_tasks(is_daily_view=True):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection() as conn:
         if is_daily_view:
             rows = conn.execute(
                 "SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks WHERE is_daily = 1 ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
-        return [(r[0], r[1], r[2], r[3], r[4], json.loads(r[5] if r[5] else '[]'), r[6] if len(r) > 6 and r[6] else "Ogólne") for r in rows]
+        result = []
+        for r in rows:
+            try:
+                subs = json.loads(r[5] if r[5] else "[]")
+            except Exception:
+                subs = []
+            result.append((r[0], r[1], r[2], r[3], r[4], subs, r[6] if len(r) > 6 and r[6] else "Ogólne"))
+        return result
 
 
 def get_routines():
-    with sqlite3.connect(LOCAL_DB) as conn: return conn.execute(
-        "SELECT id, title, is_done FROM routines ORDER BY id").fetchall()
+    with db_connection() as conn:
+        return conn.execute("SELECT id, title, is_done FROM routines ORDER BY id").fetchall()
 
 
 def add_routine_db(title):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute("INSERT INTO routines (title) VALUES (?)", (title,))
+    with db_connection(write=True) as conn:
+        conn.execute("INSERT INTO routines (title) VALUES (?)", (title,))
     push_database_async()
 
 
 def toggle_routine_db(routine_id, is_done):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE routines SET is_done = ? WHERE id = ?",
-                                                         (int(is_done), routine_id))
+    with db_connection(write=True) as conn:
+        conn.execute("UPDATE routines SET is_done = ? WHERE id = ?", (int(is_done), routine_id))
     push_database_async()
 
 
 def delete_routine_db(routine_id):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
+    with db_connection(write=True) as conn:
+        conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
     push_database_async()
 
 
 def update_subtasks_db(task_id, subtasks_list):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
-                                                         (json.dumps(subtasks_list), task_id))
+    with db_connection(write=True) as conn:
+        conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
+                     (json.dumps(subtasks_list, ensure_ascii=False), task_id))
     push_database_async()
 
 
 def get_task_priority(task_id):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection() as conn:
         res = conn.execute("SELECT priority FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return res[0] if res else "B"
 
 
 def count_daily_priority_a():
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection() as conn:
         res = conn.execute(
             "SELECT COUNT(*) FROM tasks WHERE is_daily = 1 AND priority = 'A' AND is_done = 0").fetchone()
         return res[0] if res else 0
 
 
 def add_task_db(title, is_daily, priority="B", category="Ogólne"):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute(
-        "INSERT INTO tasks (title, is_daily, priority, subtasks, category) VALUES (?, ?, ?, '[]', ?)",
-        (title.strip(), int(is_daily), priority, category))
+    with db_connection(write=True) as conn:
+        conn.execute(
+            "INSERT INTO tasks (title, is_daily, priority, subtasks, category) VALUES (?, ?, ?, '[]', ?)",
+            (title.strip(), int(is_daily), priority, category))
     push_database_async()
 
 
 def update_task_category_db(task_id, category):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection(write=True) as conn:
         conn.execute("UPDATE tasks SET category = ? WHERE id = ?", (category, task_id))
     push_database_async()
 
 
 def toggle_done_db(task_id, is_done):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET is_done = ? WHERE id = ?",
-                                                         (int(is_done), task_id))
+    with db_connection(write=True) as conn:
+        conn.execute("UPDATE tasks SET is_done = ? WHERE id = ?", (int(is_done), task_id))
     push_database_async()
 
 
 def set_daily_db(task_id, is_daily):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET is_daily = ? WHERE id = ?",
-                                                         (int(is_daily), task_id))
+    with db_connection(write=True) as conn:
+        conn.execute("UPDATE tasks SET is_daily = ? WHERE id = ?", (int(is_daily), task_id))
     push_database_async()
 
 
 def update_priority_db(task_id, new_priority):
-    with sqlite3.connect(LOCAL_DB) as conn: conn.execute("UPDATE tasks SET priority = ? WHERE id = ?",
-                                                         (new_priority, task_id))
+    with db_connection(write=True) as conn:
+        conn.execute("UPDATE tasks SET priority = ? WHERE id = ?", (new_priority, task_id))
     push_database_async()
 
 
 def delete_task_db(task_id):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection(write=True) as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     push_database_async()
 
 
 def edit_task_title_db(task_id, new_title, new_category=None):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection(write=True) as conn:
         if new_category:
-            conn.execute("UPDATE tasks SET title = ?, category = ? WHERE id = ?", (new_title.strip(), new_category, task_id))
+            conn.execute("UPDATE tasks SET title = ?, category = ? WHERE id = ?",
+                         (new_title.strip(), new_category, task_id))
         else:
             conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (new_title.strip(), task_id))
     push_database_async()
 
 
 def delete_subtask_db(task_id, subtask_idx):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection(write=True) as conn:
         row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row and row[0]:
             subtasks = json.loads(row[0])
             if 0 <= subtask_idx < len(subtasks):
                 subtasks.pop(subtask_idx)
-                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?", (json.dumps(subtasks), task_id))
+                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
+                             (json.dumps(subtasks, ensure_ascii=False), task_id))
     push_database_async()
 
 
-def _sync_only_local():
-    """Change to local-only sync mode with confirmation message."""
-    change_sync_mode("none")
-    status_text.value = "✓ Zapisano tylko lokalnie"
-    refresh_view()
-
-
 def edit_subtask_title_db(task_id, subtask_idx, new_title):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection(write=True) as conn:
         row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row and row[0]:
             subtasks = json.loads(row[0])
             if 0 <= subtask_idx < len(subtasks):
                 subtasks[subtask_idx]["title"] = new_title.strip()
-                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?", (json.dumps(subtasks), task_id))
+                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
+                             (json.dumps(subtasks, ensure_ascii=False), task_id))
     push_database_async()
 
 
 def get_completed_archive(limit=100):
-    with sqlite3.connect(LOCAL_DB) as conn:
+    with db_connection() as conn:
         return conn.execute(
             "SELECT id, title, priority, completed_at FROM completed_archive ORDER BY id DESC LIMIT ?",
             (limit,)
         ).fetchall()
 
 
+def prune_archive(keep=ARCHIVE_LIMIT):
+    with db_connection(write=True) as conn:
+        conn.execute(
+            "DELETE FROM completed_archive WHERE id NOT IN "
+            "(SELECT id FROM completed_archive ORDER BY id DESC LIMIT ?)",
+            (keep,)
+        )
+
+
 def clear_completed_archive_db():
-    with sqlite3.connect(LOCAL_DB) as conn:
+    make_local_snapshot("pre_clear_archive")
+    with db_connection(write=True) as conn:
         conn.execute("DELETE FROM completed_archive")
     push_database_async()
 
 
-def end_of_day_db():
-    with sqlite3.connect(LOCAL_DB) as conn:
+def end_of_day_db(keep_archive=ARCHIVE_LIMIT):
+    make_local_snapshot("pre_end_of_day")
+    with db_connection(write=True) as conn:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         done_tasks = conn.execute("SELECT title, priority FROM tasks WHERE is_done = 1").fetchall()
         for dt in done_tasks:
@@ -645,6 +1209,12 @@ def end_of_day_db():
         conn.execute("DELETE FROM tasks WHERE is_done = 1")
         conn.execute("UPDATE tasks SET is_daily = 0 WHERE is_daily = 1 AND is_done = 0")
         conn.execute("UPDATE routines SET is_done = 0")
+        conn.execute(
+            "DELETE FROM completed_archive WHERE id NOT IN "
+            "(SELECT id FROM completed_archive ORDER BY id DESC LIMIT ?)",
+            (keep_archive,)
+        )
+    set_config("last_reset_date", datetime.now().strftime("%Y-%m-%d"))
     push_database_async()
 
 
@@ -652,7 +1222,8 @@ def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=N
     if active_subtask_idx_map is None:
         active_subtask_idx_map = {}
     total_points = len(tasks_list) + len(routines_list)
-    if total_points == 0: return 0.0
+    if total_points == 0:
+        return 0.0
     done_points = 0
 
     for t in tasks_list:
@@ -669,7 +1240,8 @@ def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=N
                 done_points += 1
 
     for r in routines_list:
-        if r[2] == 1: done_points += 1
+        if r[2] == 1:
+            done_points += 1
 
     return done_points / total_points
 
@@ -696,8 +1268,16 @@ def main(page: ft.Page):
     page.bgcolor = COLOR_BG_MAIN
     page.theme_mode = ft.ThemeMode.DARK
     
-    # Obsługa zamknięcia aplikacji przez klawisz ESC lub wyjście z trybu pełnoekranowego
-    page.on_closing = lambda e: (reset_sync_on_exit(), sys.exit(0))
+    # Obsługa zamknięcia aplikacji przez klawisz ESC lub wyjście z trybu pełnoekranowego.
+    # Nie wołamy sys.exit(0) — na Androidzie/iOS ubijanie procesu z handlera kończyło
+    # się crashem. Wystarczy dopiąć zaległy zapis i pozwolić Fletowi zamknąć okno.
+    def handle_closing(e=None):
+        try:
+            reset_sync_on_exit()
+        except Exception:
+            LOG.exception("Błąd przy zamykaniu aplikacji")
+
+    page.on_closing = handle_closing
     
     init_db()
 
@@ -726,11 +1306,52 @@ def main(page: ft.Page):
     title_text = ft.Text("Daily", size=22, weight=ft.FontWeight.BOLD)
 
     # --- MINUTNIK SKUPIENIA (Zasada 5 minut / Pomodoro) ---
-    timer_total_seconds = 300
-    timer_seconds_left = 300
+    # Stan jest zapisany w configu i liczony od znacznika czasu (time.time()).
+    # Dzięki temu nie dryfuje (stary sleep(1) gubił sekundy) i przeżywa
+    # zminimalizowanie aplikacji na telefonie oraz restart procesu.
+    def _timer_total_from_config():
+        try:
+            return max(60, int(float(get_config("timer_total", "300") or 300)))
+        except Exception:
+            return 300
+
+    timer_total_seconds = _timer_total_from_config()
+    timer_seconds_left = timer_total_seconds
+    timer_end_ts = 0.0
     timer_running = False
     timer_message = ""
     timer_lock = threading.Lock()
+
+    if get_config("timer_running", "0") == "1":
+        try:
+            timer_end_ts = float(get_config("timer_end_ts", "0") or 0)
+        except Exception:
+            timer_end_ts = 0.0
+        remaining = max(0, int(round(timer_end_ts - time.time()))) if timer_end_ts else 0
+        if remaining > 0:
+            timer_running = True
+            timer_seconds_left = remaining
+        else:
+            timer_end_ts = 0.0
+            timer_seconds_left = 0
+            timer_message = "⏱️ Minutnik zakończył się, gdy aplikacja była zamknięta."
+    else:
+        # Pauza też jest trwała — wracamy do zapamiętanej liczby sekund.
+        try:
+            saved_left = int(float(get_config("timer_left", "0") or 0))
+        except Exception:
+            saved_left = 0
+        if 0 < saved_left <= timer_total_seconds:
+            timer_seconds_left = saved_left
+
+    def _persist_timer():
+        try:
+            set_config("timer_total", timer_total_seconds)
+            set_config("timer_running", "1" if timer_running else "0")
+            set_config("timer_end_ts", f"{timer_end_ts:.3f}")
+            set_config("timer_left", timer_seconds_left)
+        except Exception:
+            pass
 
     timer_text = ft.Text("05:00", size=22, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY)
     timer_progress = ft.ProgressBar(value=1.0, color=COLOR_PRIO_B, bgcolor="#21262d", height=4)
@@ -747,7 +1368,8 @@ def main(page: ft.Page):
         mins = timer_seconds_left // 60
         secs = timer_seconds_left % 60
         timer_text.value = f"{mins:02d}:{secs:02d}"
-        timer_progress.value = (timer_seconds_left / timer_total_seconds) if timer_total_seconds > 0 else 0.0
+        ratio = (timer_seconds_left / timer_total_seconds) if timer_total_seconds > 0 else 0.0
+        timer_progress.value = max(0.0, min(1.0, ratio))
         timer_btn_play.icon = ft.Icons.PAUSE_ROUNDED if timer_running else ft.Icons.PLAY_ARROW_ROUNDED
         timer_btn_play.icon_color = COLOR_PRIO_B if timer_running else COLOR_SUCCESS
         timer_btn_play.tooltip = "Pauza" if timer_running else "Start"
@@ -768,56 +1390,74 @@ def main(page: ft.Page):
             pass
 
     def timer_worker():
-        nonlocal timer_running, timer_seconds_left, timer_message
+        nonlocal timer_running, timer_seconds_left, timer_message, timer_end_ts
         while True:
             with timer_lock:
-                if not timer_running or timer_seconds_left <= 0:
+                if not timer_running:
                     break
-                timer_seconds_left -= 1
-                done = (timer_seconds_left == 0)
-
-            update_timer_ui()
-
+                timer_seconds_left = max(0, int(round(timer_end_ts - time.time())))
+                done = timer_seconds_left <= 0
             if done:
                 with timer_lock:
                     timer_running = False
+                    timer_end_ts = 0.0
+                    timer_seconds_left = 0
                     timer_message = "🎉 Brawo! Czas minął – paraliż pokonany!"
+                _persist_timer()
                 play_sound_feedback("timer_done")
                 update_timer_ui()
                 break
-
-            time.sleep(1)
+            update_timer_ui()
+            time.sleep(0.5)
 
     def toggle_timer():
-        nonlocal timer_running, timer_message
+        nonlocal timer_running, timer_seconds_left, timer_end_ts, timer_message
         with timer_lock:
-            timer_running = not timer_running
             timer_message = ""
-            start_thread = timer_running
+            if timer_running:
+                # Pauza: zapamiętujemy ile zostało, licznik czasu przestaje biec.
+                timer_seconds_left = max(0, int(round(timer_end_ts - time.time())))
+                timer_running = False
+                timer_end_ts = 0.0
+                start_thread = False
+            else:
+                if timer_seconds_left <= 0:
+                    timer_seconds_left = timer_total_seconds
+                timer_end_ts = time.time() + timer_seconds_left
+                timer_running = True
+                start_thread = True
+        _persist_timer()
         update_timer_ui()
         if start_thread:
             threading.Thread(target=timer_worker, daemon=True).start()
 
     def reset_timer():
-        nonlocal timer_running, timer_seconds_left, timer_message
+        nonlocal timer_running, timer_seconds_left, timer_end_ts, timer_message
         with timer_lock:
             timer_running = False
+            timer_end_ts = 0.0
             timer_seconds_left = timer_total_seconds
             timer_message = ""
+        _persist_timer()
         update_timer_ui()
 
     def set_timer_preset(seconds):
-        nonlocal timer_running, timer_total_seconds, timer_seconds_left, timer_message
+        nonlocal timer_running, timer_total_seconds, timer_seconds_left, timer_end_ts, timer_message
         with timer_lock:
             timer_running = False
+            timer_end_ts = 0.0
             timer_total_seconds = seconds
             timer_seconds_left = seconds
             timer_message = ""
+        _persist_timer()
         update_timer_ui()
         refresh_view()
 
     # --- STREFY PROJEKTÓW I FILTRY MASTER LISTY ---
     ZONES = ["Ogólne", "💼 Praca", "🏠 Dom", "🎯 Osobiste"]
+    # Strefy bazowe + kategorie już istniejące w bazie. Bez tego edycja zadania
+    # z własną kategorią (np. po imporcie JSON) po cichu zmieniała ją na "Ogólne".
+    KNOWN_CATEGORIES = get_all_categories(ZONES)
     master_search_query = ""
     master_filter_priority = "ALL"
     master_filter_status = "ALL"
@@ -857,7 +1497,8 @@ def main(page: ft.Page):
         set_config("gist_id", gist_id_input.value.strip())
         set_config("ha_url", ha_url_input.value.strip())
         set_config("sync_folder", folder_input.value.strip())
-        ok, msg = pull_database()
+        # Ręczne włączenie trybu = świadoma decyzja użytkownika, więc pobieramy zawsze.
+        ok, msg = pull_database(force=True)
 
         if not ok:
             set_config("sync_mode", "none")
@@ -866,15 +1507,24 @@ def main(page: ft.Page):
         else:
             push_ok, push_msg = push_database()
             gist_id_input.value = get_config("gist_id", "")
-            status_text.value = f"✓ {push_msg or msg}"
-            warning_text.value = ""
+            if push_ok:
+                status_text.value = f"✓ {push_msg or msg}"
+                warning_text.value = ""
+            else:
+                status_text.value = f"✓ {msg}"
+                warning_text.value = f"⚠️ Zapis nieudany: {push_msg}"
 
         refresh_view()
 
     def manual_sync(e=None):
-        ok, msg = pull_database()
-        status_text.value = f"✓ {msg}" if ok else ""
-        warning_text.value = "" if ok else f"⚠️ {msg}"
+        ok, msg = pull_database(force=True)
+        if ok:
+            push_ok, push_msg = push_database()
+            status_text.value = f"✓ {push_msg or msg}"
+            warning_text.value = "" if push_ok else f"⚠️ Zapis nieudany: {push_msg}"
+        else:
+            status_text.value = ""
+            warning_text.value = f"⚠️ {msg}"
         refresh_view()
 
     def _sync_only_local():
@@ -931,12 +1581,10 @@ def main(page: ft.Page):
                 refresh_view()
                 return
 
-            # Zapisujemy w obu potencjalnych lokalizacjach (dla kompatybilności ze wszystkimi wersjami main.py)
+            # Zapisujemy tylko w folderach danych aplikacji. NIE piszemy do folderu
+            # projektu (na PC brudziło to repozytorium git, a na mobile i tak jest
+            # tylko do odczytu). main.py i tak czyta OTA_DIR oraz .../data.
             targets = [APP_DIR]
-            # Dodajemy folder głównego projektu jako dodatkowy target (ważne po restarcie!)
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            targets.append(base_dir)
-            
             base_env = os.environ.get("FLET_APP_STORAGE_DATA")
             if base_env:
                 targets.append(os.path.join(base_env, ".master_adhd_data"))
@@ -944,15 +1592,18 @@ def main(page: ft.Page):
             else:
                 targets.append(os.path.join(os.path.expanduser("~"), ".master_adhd_data"))
 
-            # Zapisujemy pliki we wszystkich znanych lokalizacjach:
-            # - APP_DIR / folder danych (na Androidzie/iOS kod wbudowany jest tylko do odczytu),
-            # - folder projektu (PC),
-            # - katalogi wskazywane przez FLET_APP_STORAGE_DATA.
             saved_dirs = []
             for target_dir in set(targets):
                 try:
                     os.makedirs(target_dir, exist_ok=True)
-                    with open(os.path.join(target_dir, "app_logic_ota.py"), "w", encoding="utf-8") as f:
+                    ota_path = os.path.join(target_dir, "app_logic_ota.py")
+                    # Rollback: zachowujemy poprzednią wersję przed nadpisaniem.
+                    if os.path.exists(ota_path):
+                        try:
+                            shutil.copy2(ota_path, os.path.join(target_dir, "app_logic_ota.prev.py"))
+                        except Exception:
+                            pass
+                    with open(ota_path, "w", encoding="utf-8") as f:
                         f.write(new_code)
                     # version.txt jest czytany jako pierwszy, ota_version.txt jako fallback.
                     # Zapisujemy oba, aby wersja była spójna po restarcie (PC i mobile).
@@ -961,9 +1612,9 @@ def main(page: ft.Page):
                     with open(os.path.join(target_dir, "ota_version.txt"), "w", encoding="utf-8") as f:
                         f.write(remote_ver)
                     saved_dirs.append(target_dir)
-                    print(f"[OTA] Zapisano v{remote_ver} w {target_dir}")
+                    LOG.info("OTA: zapisano v%s w %s", remote_ver, target_dir)
                 except Exception as we:
-                    print(f"[OTA] Błąd zapisu w {target_dir}: {we}")
+                    LOG.warning("OTA: błąd zapisu w %s: %s", target_dir, we)
 
             if not saved_dirs:
                 warning_text.value = ("⚠️ Nie udało się zapisać aktualizacji — brak uprawnień do zapisu "
@@ -985,10 +1636,9 @@ def main(page: ft.Page):
             )
             refresh_view()
 
-            print(f"[OTA] OK: aktualizacja v{remote_ver} pobrana i zapisana.")
-            print(f"[OTA] Zapisano w: {', '.join(saved_dirs)}")
-            print("[OTA] Zamknij i otwórz aplikację, aby aktywować nową wersję.")
+            LOG.info("OTA: aktualizacja v%s pobrana i zapisana w %s", remote_ver, ", ".join(saved_dirs))
         except Exception as ex:
+            LOG.exception("OTA: błąd aktualizacji")
             warning_text.value = f"⚠️ Błąd aktualizacji OTA: {ex}"
             status_text.value = ""
             refresh_view()
@@ -1060,27 +1710,36 @@ def main(page: ft.Page):
 
     master_category_dropdown = ft.Dropdown(
         label="Strefa / Kategoria",
-        options=[ft.dropdown.Option(z) for z in ZONES],
+        options=[ft.dropdown.Option(z) for z in KNOWN_CATEGORIES],
         value="Ogólne",
         bgcolor=COLOR_BG_SURFACE,
         border_color=COLOR_BG_BORDER
     )
+    new_category_field = ft.TextField(
+        label="Nowa strefa (opcjonalnie — nadpisuje wybór powyżej)",
+        bgcolor=COLOR_BG_SURFACE,
+        border_color=COLOR_BG_BORDER,
+        dense=True,
+    )
 
     def save_master_task(e=None):
         if master_title_field.value.strip():
+            custom_category = (new_category_field.value or "").strip()
             add_task_db(
                 master_title_field.value.strip(),
                 is_daily=False,
                 priority=selected_new_prio,
-                category=master_category_dropdown.value or "Ogólne"
+                category=custom_category or master_category_dropdown.value or "Ogólne"
             )
             master_title_field.value = ""
+            new_category_field.value = ""
             master_dialog.open = False
             status_text.value = "✓ Dodano"
             refresh_view()
 
     master_dialog = ft.AlertDialog(title=ft.Text("➕ Nowy projekt / zadanie"), content=ft.Column(
-        [master_title_field, master_category_dropdown, ft.Text("Priorytet:", size=13), prio_select_row], tight=True, spacing=10),
+        [master_title_field, master_category_dropdown, new_category_field,
+         ft.Text("Priorytet:", size=13), prio_select_row], tight=True, spacing=10),
                                    actions=[ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
                                             ft.Button("Dodaj", on_click=save_master_task)])
 
@@ -1117,7 +1776,7 @@ def main(page: ft.Page):
     )
     edit_category_dropdown = ft.Dropdown(
         label="Strefa / Kategoria",
-        options=[ft.dropdown.Option(z) for z in ZONES],
+        options=[ft.dropdown.Option(z) for z in KNOWN_CATEGORIES],
         value="Ogólne",
         bgcolor=COLOR_BG_SURFACE,
         border_color=COLOR_BG_BORDER
@@ -1128,7 +1787,12 @@ def main(page: ft.Page):
         nonlocal editing_task_id
         editing_task_id = task_id
         edit_task_field.value = current_title
-        edit_category_dropdown.value = current_category or "Ogólne"
+        cat = current_category or "Ogólne"
+        # Dopisz kategorię, której nie ma jeszcze na liście (import JSON / własna strefa).
+        existing = [opt.key for opt in edit_category_dropdown.options]
+        if cat not in existing:
+            edit_category_dropdown.options.append(ft.dropdown.Option(cat))
+        edit_category_dropdown.value = cat
         edit_task_dialog.open = True
         page.update()
 
@@ -1250,16 +1914,87 @@ def main(page: ft.Page):
     def confirm_clear_archive():
         clear_completed_archive_db()
         clear_archive_dialog.open = False
-        status_text.value = "✓ Wyczyszczono historię sukcesów"
+        status_text.value = "✓ Wyczyszczono historię sukcesów (snapshot zapisany)"
         warning_text.value = ""
+        refresh_view()
+
+    # --- POTWIERDZENIE "KOŃCA DNIA" (operacja destrukcyjna) ---
+    end_of_day_dialog = ft.AlertDialog(
+        title=ft.Text("🌙 Zakończyć dzień?"),
+        content=ft.Text(
+            "Zrobione zadania trafią do Dziennika Sukcesów i znikną z listy Daily.\n"
+            "Niezrobione zadania wrócą do Master listy, a rutyny zostaną odznaczone.\n\n"
+            "Przed resetem zapisujemy snapshot — będzie można go przywrócić w Ustawieniach."
+        ),
+        actions=[
+            ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
+            ft.Button("Zakończ dzień", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                      on_click=lambda e: confirm_end_of_day())
+        ]
+    )
+
+    def open_end_of_day_dialog(e=None):
+        end_of_day_dialog.open = True
+        page.update()
+
+    def confirm_end_of_day(e=None):
+        end_of_day_db()
+        end_of_day_dialog.open = False
+        status_text.value = "✓ Zakończono dzień. Snapshot zapisany — można go przywrócić w Ustawieniach."
+        warning_text.value = ""
+        refresh_view()
+
+    # --- IMPORT Z PLIKU JSON ---
+    import_path_input = ft.TextField(
+        label="Ścieżka do pliku JSON",
+        value=latest_json_backup(),
+        bgcolor=COLOR_BG_SURFACE,
+        border_color=COLOR_BG_BORDER,
+        dense=True,
+    )
+    import_confirm_dialog = ft.AlertDialog(
+        title=ft.Text("📤 Import danych z JSON"),
+        content=ft.Text(
+            "Jak zaimportować dane?\n\n"
+            "• „Dopisz” — dodaje zadania/rutyny z pliku do obecnych danych.\n"
+            "• „Zastąp” — usuwa obecne dane i wstawia zawartość pliku.\n\n"
+            "Przed importem automatycznie powstaje snapshot."
+        ),
+        actions=[
+            ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
+            ft.TextButton("Dopisz", on_click=lambda e: run_json_import(False)),
+            ft.Button("Zastąp", bgcolor="#ef444422", color=COLOR_PRIO_A,
+                      on_click=lambda e: run_json_import(True)),
+        ]
+    )
+
+    def open_import_dialog(e=None):
+        if not (import_path_input.value or "").strip():
+            import_path_input.value = latest_json_backup()
+        import_confirm_dialog.open = True
+        page.update()
+
+    def run_json_import(replace_existing):
+        path = (import_path_input.value or "").strip()
+        ok, msg = import_database_from_json_file(path, replace_existing=replace_existing)
+        import_confirm_dialog.open = False
+        if ok:
+            status_text.value = f"✓ {msg}"
+            warning_text.value = ""
+        else:
+            status_text.value = ""
+            warning_text.value = f"⚠️ {msg}"
         refresh_view()
 
     def close_dialogs():
         quick_dialog.open = master_dialog.open = subtask_dialog.open = False
         edit_task_dialog.open = delete_task_dialog.open = edit_subtask_dialog.open = clear_archive_dialog.open = False
+        end_of_day_dialog.open = import_confirm_dialog.open = False
         page.update()
 
-    page.overlay.extend([quick_dialog, master_dialog, subtask_dialog, edit_task_dialog, delete_task_dialog, edit_subtask_dialog, clear_archive_dialog])
+    # Kolejność overlay jest używana przez testy (indeksy 3,4,5) — nowe okna tylko na końcu.
+    page.overlay.extend([quick_dialog, master_dialog, subtask_dialog, edit_task_dialog, delete_task_dialog,
+                         edit_subtask_dialog, clear_archive_dialog, end_of_day_dialog, import_confirm_dialog])
 
     def open_quick_modal(e):
         quick_dump_field.value = ""
@@ -1310,10 +2045,6 @@ def main(page: ft.Page):
         status_text.value = warning_text.value = ""
         ota_restart_hint.value = ""
         refresh_view()
-
-    # Reset synchronizacji przy zmianie widoku (unikamy konfliktów plików w trybie folder)
-    if "folder" in get_config("sync_mode", ""):
-        page.on_resize = lambda e, orig=page.on_resize: (reset_sync_on_exit(), refresh_view())
 
     def highlight_nav(box, is_hover, default_border=None):
         box.border = ft.Border.all(2, COLOR_PRIO_B) if is_hover else default_border
@@ -1397,6 +2128,32 @@ def main(page: ft.Page):
         content=ft.Row([sync_badge_icon, sync_badge_text], spacing=4, tight=True),
         bgcolor=COLOR_BG_SURFACE, padding=ft.Padding.symmetric(horizontal=8, vertical=4), border_radius=6
     )
+
+    def on_sync_state(state):
+        """Bieżący stan zapisu widoczny od razu w pasku bocznym (nie tylko w Ustawieniach)."""
+        try:
+            status = state.get("status")
+            if status == "error":
+                sync_badge_text.value = "Błąd zapisu"
+                sync_badge_text.color = COLOR_PRIO_A
+                sync_badge_icon.name = ft.Icons.CLOUD_OFF
+                sync_badge_icon.color = COLOR_PRIO_A
+                warning_text.value = f"⚠️ Zapis nieudany: {state.get('message', '')}"
+            elif status == "ok":
+                sync_badge_text.value = f"Zapisano {datetime.now().strftime('%H:%M')}"
+                sync_badge_text.color = COLOR_SUCCESS
+                sync_badge_icon.name = ft.Icons.CLOUD_DONE
+                sync_badge_icon.color = COLOR_SUCCESS
+            elif status == "syncing":
+                sync_badge_text.value = "Zapisywanie..."
+                sync_badge_text.color = COLOR_PRIO_B
+                sync_badge_icon.name = ft.Icons.CLOUD_UPLOAD
+                sync_badge_icon.color = COLOR_PRIO_B
+            page.update()
+        except Exception:
+            pass
+
+    register_sync_status_callback(on_sync_state)
 
     sidebar = ft.Container(
         width=210, bgcolor=COLOR_BG_CARD, padding=12,
@@ -1514,6 +2271,13 @@ def main(page: ft.Page):
             sync_badge_icon.name = ft.Icons.STORAGE
             sync_badge_icon.color = COLOR_TEXT_SECONDARY
 
+        # Błąd ostatniego zapisu jest ważniejszy niż nazwa trybu — nie chowamy go.
+        if get_sync_state().get("status") == "error":
+            sync_badge_text.value = "Błąd zapisu"
+            sync_badge_text.color = COLOR_PRIO_A
+            sync_badge_icon.name = ft.Icons.CLOUD_OFF
+            sync_badge_icon.color = COLOR_PRIO_A
+
         if mob:
             root_layout.content = ft.Column([content_area, ft.Divider(height=1, color=ft.Colors.GREY_800), bottom_nav],
                                             expand=True, spacing=0)
@@ -1609,7 +2373,7 @@ def main(page: ft.Page):
                         ft.Icon(ft.Icons.SYSTEM_UPDATE_ALT, size=18, color=COLOR_PRIO_B),
                         ft.Text("Aktualizacje OTA (GitHub)", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
                     ], spacing=8),
-                    ft.Text(f"Wersja wbudowana: v{APP_VERSION} | Aktywna: v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Text(f"Wersja wbudowana: v{get_bundled_version()} | Aktywna (OTA): v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
                     ft.Row([
                         ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
                                   on_click=trigger_manual_ota),
@@ -1637,7 +2401,12 @@ def main(page: ft.Page):
                         value=get_config("sound_enabled", "1") == "1",
                         active_color=COLOR_SUCCESS,
                         on_change=toggle_sound
-                    )
+                    ),
+                    ft.Text(
+                        "Dźwięki systemowe działają tylko na Windows. Na telefonie aplikacja "
+                        "nie odtwarza dźwięku (Flet nie ma tam modułu audio) — minutnik nadal działa.",
+                        size=11, color=COLOR_TEXT_SECONDARY
+                    ) if sys.platform != "win32" else ft.Container()
                 ], spacing=8)
             )
 
@@ -1659,6 +2428,16 @@ def main(page: ft.Page):
                     warning_text.value = f"⚠️ {msg}"
                 refresh_view()
 
+            def handle_export_logs(e):
+                ok, path = export_logs()
+                if ok:
+                    status_text.value = "✓ Zapisano plik logów"
+                    warning_text.value = f"Logi: {path}"
+                else:
+                    warning_text.value = f"⚠️ {path}"
+                refresh_view()
+
+            snapshot_count = len(list_snapshots())
             card_backup = ft.Container(
                 bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
                 content=ft.Column([
@@ -1666,10 +2445,23 @@ def main(page: ft.Page):
                         ft.Icon(ft.Icons.SECURITY_ROUNDED, size=18, color=COLOR_PRIO_B),
                         ft.Text("Kopia Zapasowa i Bezpieczeństwo", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
                     ], spacing=8),
-                    ft.Text("Każda synchronizacja z chmurą Gist automatycznie zapisuje bazę SQLite oraz czytelny plik backup_tasks.json. Dodatkowo przed każdym pobraniem tworzony jest lokalny snapshot.", size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Text(
+                        "Każda synchronizacja i każda operacja destrukcyjna (koniec dnia, czyszczenie "
+                        f"archiwum, import) tworzy snapshot bazy. Dostępnych snapshotów: {snapshot_count}.",
+                        size=12, color=COLOR_TEXT_SECONDARY
+                    ),
                     ft.Row([
                         ft.Button("📥 Eksportuj bazę do pliku JSON", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=handle_export_json),
-                        ft.Button("🛡️ Przywróć snapshot sprzed synchronizacji", bgcolor=COLOR_BG_SURFACE, color=COLOR_PRIO_B, on_click=handle_restore_snapshot)
+                        ft.Button("🛡️ Przywróć ostatni snapshot", bgcolor=COLOR_BG_SURFACE, color=COLOR_PRIO_B, on_click=handle_restore_snapshot),
+                        ft.Button("📄 Eksportuj logi", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_SECONDARY, on_click=handle_export_logs)
+                    ], wrap=True, spacing=10),
+                    ft.Divider(height=1, color=ft.Colors.GREY_800),
+                    ft.Text("Import z pliku JSON", weight=ft.FontWeight.BOLD, size=13, color=COLOR_TEXT_PRIMARY),
+                    import_path_input,
+                    ft.Row([
+                        ft.Button("📤 Importuj z JSON", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=open_import_dialog),
+                        ft.Button("📂 Użyj najnowszego backupu", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_SECONDARY,
+                                  on_click=lambda e: (setattr(import_path_input, "value", latest_json_backup()), refresh_view()))
                     ], wrap=True, spacing=10)
                 ], spacing=10)
             )
@@ -2176,17 +2968,6 @@ def main(page: ft.Page):
                     on_click=lambda e, tid=task_id, td=task_done: handle_task_check(tid, not td, None, subtasks)
                 )
 
-                daily_badge = ft.Container(
-                    content=ft.Row([
-                        ft.Icon(ft.Icons.WB_SUNNY, size=12, color=COLOR_PRIO_B),
-                        ft.Text("Daily", size=10, color=COLOR_PRIO_B, weight=ft.FontWeight.BOLD)
-                    ], spacing=4, tight=True),
-                    bgcolor="#f59e0b22",
-                    padding=ft.Padding.symmetric(horizontal=8, vertical=3),
-                    border_radius=6,
-                    tooltip="Zadanie jest na liście Daily"
-                )
-
                 category_badge = ft.Container(
                     content=ft.Text(category, size=10, color=COLOR_PRIO_C, weight=ft.FontWeight.BOLD),
                     bgcolor="#3b82f622",
@@ -2275,8 +3056,6 @@ def main(page: ft.Page):
                     action_items = []
                     if category_badge:
                         action_items.append(category_badge)
-                    if is_daily:
-                        action_items.append(daily_badge)
                     action_items.append(ft.Container(expand=True))
                     action_items.extend([add_krok_btn, edit_btn, del_btn])
                     action_row = ft.Row(action_items, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
@@ -2297,8 +3076,6 @@ def main(page: ft.Page):
                     ]
                     if category_badge:
                         title_row_controls.append(category_badge)
-                    if is_daily:
-                        title_row_controls.append(daily_badge)
                     title_row_controls.append(add_krok_btn)
                     title_row_controls.append(edit_btn)
                     title_row_controls.append(del_btn)
@@ -2508,6 +3285,31 @@ def main(page: ft.Page):
         content_column.controls = elements
 
         if is_daily_mode:
+            # Podpowiedź nowego dnia — jeśli ostatni reset był wcześniej, przypominamy
+            # o zamknięciu dnia zamiast po cichu gubić zrobione wczoraj zadania.
+            try:
+                last_reset = get_config("last_reset_date", "")
+            except Exception:
+                last_reset = ""
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            if last_reset and last_reset != today_str:
+                content_column.controls.append(
+                    ft.Container(
+                        bgcolor="#3b82f622",
+                        border=ft.Border.all(1, COLOR_PRIO_B),
+                        border_radius=10,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.WB_SUNNY_OUTLINED, size=18, color=COLOR_PRIO_B),
+                            ft.Text(
+                                f"Nowy dzień! Ostatni reset: {last_reset}. "
+                                "Zamknij poprzedni dzień, aby przenieść zrobione zadania do Dziennika Sukcesów.",
+                                size=12, color=COLOR_TEXT_PRIMARY, expand=True
+                            ),
+                            ft.TextButton("Zamknij dzień", on_click=open_end_of_day_dialog)
+                        ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                    )
+                )
             content_column.controls.append(
                 ft.Row([
                     ft.Button(
@@ -2515,7 +3317,7 @@ def main(page: ft.Page):
                         icon=ft.Icons.NIGHTLIGHT_ROUND,
                         bgcolor=COLOR_BG_SURFACE,
                         color=COLOR_TEXT_PRIMARY,
-                        on_click=lambda e: (end_of_day_db(), refresh_view())
+                        on_click=open_end_of_day_dialog
                     )
                 ], alignment=ft.MainAxisAlignment.END)
             )
@@ -2525,3 +3327,33 @@ def main(page: ft.Page):
     page.on_resize = lambda e: refresh_view()
     page.add(ft.SafeArea(content=root_layout, expand=True))
     refresh_view()
+
+    # Minutnik odtworzony z configu (np. po restarcie w trakcie odliczania)
+    # musi sam wznowić wątek — inaczej stałby w miejscu.
+    if timer_running:
+        threading.Thread(target=timer_worker, daemon=True).start()
+
+    # Startowy pull w tle: nie blokuje pierwszego rysowania UI i NIE nadpisuje
+    # nowszych danych lokalnych (force=False).
+    def startup_pull():
+        if get_config("sync_mode", "none") == "none":
+            return
+        _STARTUP_PULL_ACTIVE.set()
+        try:
+            ok, msg = pull_database(force=False)
+            LOG.info("Startowy pull: %s (ok=%s)", msg, ok)
+            if ok and "Pobrano" in msg:
+                try:
+                    refresh_view()
+                except Exception:
+                    pass
+        except Exception:
+            LOG.exception("Błąd startowego pobierania bazy")
+        finally:
+            _STARTUP_PULL_ACTIVE.clear()
+            # Jeśli użytkownik coś zmienił w trakcie pobierania, teraz wysyłamy.
+            if _PUSH_DEFERRED.is_set():
+                _PUSH_DEFERRED.clear()
+                push_database_async()
+
+    threading.Thread(target=startup_pull, name="master-adhd-startup-pull", daemon=True).start()

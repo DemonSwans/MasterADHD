@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import shutil
 import ssl
 import sys
 import traceback
@@ -33,6 +34,68 @@ def get_ota_dir():
 OTA_DIR = get_ota_dir()
 OTA_LOGIC_FILE = os.path.join(OTA_DIR, "app_logic_ota.py")
 OTA_VERSION_FILE = os.path.join(OTA_DIR, "ota_version.txt")
+# Rollback OTA: poprzednia działająca wersja + informacja, którą wersję uznano za wadliwą.
+OTA_PREV_LOGIC_FILE = os.path.join(OTA_DIR, "app_logic_ota.prev.py")
+OTA_PREV_VERSION_FILE = os.path.join(OTA_DIR, "ota_prev_version.txt")
+OTA_FAILED_VERSION_FILE = os.path.join(OTA_DIR, "ota_failed_version.txt")
+
+
+def get_failed_ota_version() -> str:
+    """Wersja, która wcześniej wywaliła aplikację (nie pobieramy jej ponownie)."""
+    try:
+        if os.path.exists(OTA_FAILED_VERSION_FILE):
+            with open(OTA_FAILED_VERSION_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return ""
+
+
+def mark_failed_ota_version(version: str):
+    try:
+        if not version:
+            return
+        with open(OTA_FAILED_VERSION_FILE, "w", encoding="utf-8") as f:
+            f.write(version.strip())
+        print(f"[OTA] Wersja v{version} oznaczona jako wadliwa — nie zostanie pobrana ponownie.")
+    except Exception as e:
+        print(f"[OTA] Nie udało się zapisać informacji o wadliwej wersji: {e}")
+
+
+def clear_failed_ota_version():
+    try:
+        if os.path.exists(OTA_FAILED_VERSION_FILE):
+            os.remove(OTA_FAILED_VERSION_FILE)
+    except Exception:
+        pass
+
+
+def rollback_ota() -> bool:
+    """Przywraca poprzednią wersję OTA po błędzie nowego kodu.
+
+    Wcześniej `main.py` kasował pobrany plik i pokazywał ekran błędu — użytkownik
+    tracił działającą wersję. Teraz najpierw wracamy do `app_logic_ota.prev.py`.
+    """
+    if not os.path.exists(OTA_PREV_LOGIC_FILE):
+        return False
+    try:
+        shutil.copy2(OTA_PREV_LOGIC_FILE, OTA_LOGIC_FILE)
+        prev_ver = ""
+        if os.path.exists(OTA_PREV_VERSION_FILE):
+            with open(OTA_PREV_VERSION_FILE, "r", encoding="utf-8") as f:
+                prev_ver = f.read().strip()
+        if prev_ver:
+            for ver_path in (OTA_VERSION_FILE, os.path.join(OTA_DIR, "version.txt")):
+                try:
+                    with open(ver_path, "w", encoding="utf-8") as f:
+                        f.write(prev_ver)
+                except Exception:
+                    pass
+        print(f"[OTA] Rollback do poprzedniej wersji v{prev_ver or '?'} zakończony.")
+        return True
+    except Exception as e:
+        print(f"[OTA] Rollback nie udał się: {e}")
+        return False
 
 
 def is_newer_version(remote_ver: str, local_ver: str) -> bool:
@@ -111,6 +174,14 @@ def check_and_download_ota(force=False, status_cb=None) -> tuple[bool, str]:
         local_ver = get_installed_ota_version()
         print(f"[OTA] Sprawdzanie aktualizacji: zdalna v{remote_ver}, lokalna v{local_ver}")
 
+        # Wersja, która wcześniej wysypała aplikację, nie jest pobierana ponownie.
+        # Zapobiega to pętli: pobierz -> crash -> pobierz to samo -> crash.
+        failed_ver = get_failed_ota_version()
+        if failed_ver and _version_tuple(failed_ver) == _version_tuple(remote_ver):
+            print(f"[OTA] Pomijam wersję v{remote_ver} — oznaczona jako wadliwa.")
+            update_status(f"Wersja v{remote_ver} jest oznaczona jako wadliwa — pominięto", 1.0)
+            return False, local_ver
+
         if force or is_newer_version(remote_ver, local_ver):
             print(f"[OTA] Wykryto nowszą wersję lub wymuszenie (v{remote_ver}). Pobieranie kodu...")
             update_status(f"Pobieranie nowego kodu v{remote_ver}...", 0.5)
@@ -123,11 +194,21 @@ def check_and_download_ota(force=False, status_cb=None) -> tuple[bool, str]:
             update_status("Weryfikacja i instalacja aktualizacji...", 0.8)
             # Weryfikacja czy pobrany kod to poprawny Python (ochrona przed uciętym plikiem)
             compile(new_code, "app_logic_ota.py", "exec")
+            # Zanim nadpiszemy działający plik, odkładamy poprzednią wersję na bok.
+            # Dzięki temu błąd nowego kodu można cofnąć bez utraty aplikacji.
+            if os.path.exists(OTA_LOGIC_FILE):
+                try:
+                    shutil.copy2(OTA_LOGIC_FILE, OTA_PREV_LOGIC_FILE)
+                    with open(OTA_PREV_VERSION_FILE, "w", encoding="utf-8") as f:
+                        f.write(local_ver)
+                except Exception as e:
+                    print(f"[OTA] Nie udało się zapisać kopii poprzedniej wersji: {e}")
             with open(OTA_LOGIC_FILE, "w", encoding="utf-8") as f:
                 f.write(new_code)
             with open(OTA_VERSION_FILE, "w", encoding="utf-8") as f:
                 f.write(remote_ver)
 
+            clear_failed_ota_version()
             print(f"[OTA] Pomyślnie pobrano i zapisano nową wersję v{remote_ver}.")
             update_status(f"Zaktualizowano pomyślnie do v{remote_ver}!", 1.0)
             return True, remote_ver
@@ -141,10 +222,12 @@ def check_and_download_ota(force=False, status_cb=None) -> tuple[bool, str]:
     return False, get_installed_ota_version()
 
 
-def load_and_run(page: ft.Page):
+def load_and_run(page: ft.Page, allow_rollback: bool = True):
     disable_ota = os.environ.get("DISABLE_OTA", "0") == "1"
     updated = False
     new_ver = ""
+    # Moduł wbudowany — przywracamy go, jeśli pobrany kod OTA wysypie się w trakcie.
+    original_app_logic = sys.modules.get("app_logic")
 
     # Wizualny ekran ładowania / paska postępu aktualizacji
     if not disable_ota and not hasattr(page, "_ota_checked"):
@@ -255,7 +338,7 @@ def load_and_run(page: ft.Page):
             mod.main(page)
         else:
             # 3. Wersja bazowa wbudowana w projekt (tylko jak brakuje OTA plików!)
-            print("[OTA] ⚠️ Brak OTA plików - ładuję WBUDOWANY app_logic.py")
+            print("[OTA] Brak OTA plików - ładuję WBUDOWANY app_logic.py")
             import app_logic
             app_logic.main(page)
 
@@ -281,11 +364,39 @@ def load_and_run(page: ft.Page):
 
     except Exception as e:
         # 4. ZABEZPIECZENIE: Jeśli pobrany plik ma błąd, nie blokujemy aplikacji!
+        # NIE kasujemy już pliku OTA — najpierw wracamy do poprzedniej wersji (.prev).
         err_msg = traceback.format_exc()
         print(f"[OTA Error] Błąd podczas uruchamiania modułu: {err_msg}")
-        if os.path.exists(OTA_LOGIC_FILE):
+
+        failed_ver = new_ver
+        if not failed_ver and os.path.exists(OTA_VERSION_FILE):
             try:
-                os.remove(OTA_LOGIC_FILE)
+                with open(OTA_VERSION_FILE, "r", encoding="utf-8") as f:
+                    failed_ver = f.read().strip()
+            except Exception:
+                failed_ver = ""
+        mark_failed_ota_version(failed_ver)
+
+        # Przywróć moduł wbudowany w sys.modules (pobrany kod mógł go nadpisać).
+        if original_app_logic is not None and sys.modules.get("app_logic") is not original_app_logic:
+            sys.modules["app_logic"] = original_app_logic
+
+        if allow_rollback and rollback_ota():
+            print("[OTA] Próba ponownego startu na poprzedniej wersji...")
+            page.controls.clear()
+            try:
+                load_and_run(page, allow_rollback=False)
+                return
+            except Exception:
+                print("[OTA Error] Poprzednia wersja również nie wystartowała.")
+                err_msg = traceback.format_exc()
+        elif allow_rollback:
+            # Brak kopii .prev — odkładamy wadliwy plik OTA, żeby nie blokował startu.
+            # Dotyczy wyłącznie pliku w folderze danych (nie ruszamy repo!).
+            try:
+                if os.path.exists(OTA_LOGIC_FILE):
+                    os.replace(OTA_LOGIC_FILE, OTA_LOGIC_FILE + ".bad")
+                    print("[OTA] Wadliwy plik OTA odłożony jako app_logic_ota.py.bad")
             except Exception:
                 pass
 

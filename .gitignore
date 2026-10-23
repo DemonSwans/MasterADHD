@@ -1,0 +1,24 @@
+# Pliki generowane w czasie działania aplikacji i testów
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+*.log
+snapshots/
+test_sync_folder/
+master_adhd_backup_*.json
+master_adhd_log_*.txt
+
+# Artefakty OTA (aplikacja zapisuje je w folderze danych, nie w repo)
+app_logic_ota.py
+app_logic_ota.prev.py
+app_logic_ota.py.bad
+ota_version.txt
+ota_prev_version.txt
+ota_failed_version.txt
+
+# Środowiska
+.venv/
+venv/
+.env

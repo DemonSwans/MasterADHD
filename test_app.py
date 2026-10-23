@@ -45,8 +45,10 @@ class DummyPage:
 
 # --- PRZYGOTOWANIE I SPRZĄTANIE ŚRODOWISKA ---
 @pytest.fixture(autouse=True)
-def setup_and_teardown(tmp_path):
+def setup_and_teardown(tmp_path, monkeypatch):
     import app_logic
+    # Testy nie mogą dotykać sieci ani prawdziwego folderu OTA użytkownika.
+    monkeypatch.setenv("DISABLE_OTA", "1")
     test_db = str(tmp_path / "test_tasks.db")
     test_config = str(tmp_path / "test_config.db")
 
@@ -524,6 +526,154 @@ def test_task_categories_and_sound():
     # Dźwięki zwrotne nie mogą rzucać wyjątków
     main.play_sound_feedback("task_done")
     main.play_sound_feedback("timer_done")
+
+
+# --- 14. TESTY ZABEZPIECZEŃ DANYCH (starsza chmura, snapshoty, integralność) ---
+def test_pull_does_not_overwrite_newer_local_data(tmp_path):
+    sync_dir = tmp_path / "dysk"
+    sync_dir.mkdir()
+    main.set_config("sync_mode", "folder")
+    main.set_config("sync_folder", str(sync_dir))
+
+    # Lokalnie powstaje świeże zadanie -> lokalna baza jest nowsza.
+    main.add_task_db("Najnowsze lokalne", is_daily=1, priority="A")
+    assert any(t[1] == "Najnowsze lokalne" for t in main.get_tasks(is_daily_view=True))
+
+    # Na "dysku" leży starsza baza (sama tabela-znacznik, bez naszego zadania).
+    import sqlite3
+    remote = sync_dir / "tasks.db"
+    conn = sqlite3.connect(str(remote))
+    conn.execute("CREATE TABLE marker (x INTEGER)")
+    conn.commit()
+    conn.close()
+    old_time = os.path.getmtime(main.LOCAL_DB) - 3600
+    os.utime(str(remote), (old_time, old_time))
+
+    ok, msg = main.pull_database(force=False)
+    assert ok is True
+    assert "nowsza" in msg.lower()
+    # Nic nie zostało nadpisane.
+    assert any(t[1] == "Najnowsze lokalne" for t in main.get_tasks(is_daily_view=True))
+
+
+def test_gist_pull_skips_older_cloud(monkeypatch):
+    main.add_task_db("Lokalny skarb", is_daily=1, priority="A")
+
+    # Bajty "chmury" to poprawna kopia bazy, ale z o wiele starszym exported_at.
+    tmp_copy = str(main.LOCAL_DB) + ".cloud_copy"
+    ok, _ = main.backup_database(tmp_copy)
+    assert ok is True
+    with open(tmp_copy, "rb") as f:
+        cloud_b64 = base64.b64encode(f.read()).decode("utf-8")
+    os.remove(tmp_copy)
+
+    old_backup = json.dumps({"exported_at": "2000-01-01T00:00:00"})
+
+    class MockResponse:
+        status = 200
+
+        def __init__(self, payload):
+            self._data = json.dumps(payload).encode("utf-8")
+
+        def read(self):
+            return self._data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    def mock_urlopen(req, timeout=5):
+        return MockResponse({
+            "files": {
+                "tasks.db.b64": {"content": cloud_b64},
+                "backup_tasks.json": {"content": old_backup},
+            }
+        })
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    main.set_config("sync_mode", "gist")
+    main.set_config("gist_token", "ghp_test_token_123")
+    main.set_config("gist_id", "istniejace_id")
+
+    ok, msg = main.pull_database(force=False)
+    assert ok is True
+    assert "starsza" in msg.lower()
+    assert any(t[1] == "Lokalny skarb" for t in main.get_tasks(is_daily_view=True))
+
+
+def test_snapshot_rotation_and_integrity_check(tmp_path):
+    folder = main.get_snapshot_dir()
+    for i in range(6):
+        path = os.path.join(folder, f"tasks_test_20240101_00000{i}.db")
+        with open(path, "wb") as f:
+            f.write(b"x")
+    main.prune_snapshots(keep=3)
+    remaining = [p for p in main.list_snapshots() if os.path.basename(p).startswith("tasks_test_")]
+    assert len(remaining) == 3
+    # Zostają najnowsze (sortowanie po nazwie malejąco).
+    assert os.path.basename(remaining[0]) == "tasks_test_20240101_000005.db"
+
+    # Uszkodzony plik nie jest uznawany za bazę.
+    bad = tmp_path / "uszkodzona.db"
+    bad.write_bytes(b"to nie jest baza sqlite")
+    ok, status = main.check_db_integrity(str(bad))
+    assert ok is False
+    assert status
+
+
+def test_end_of_day_creates_snapshot_and_remembers_date():
+    main.add_task_db("Do zamknięcia", is_daily=1, priority="A")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+    main.toggle_done_db(task_id, 1)
+
+    before = len(main.list_snapshots())
+    main.end_of_day_db()
+    after = len(main.list_snapshots())
+    assert after > before
+    assert main.get_config("last_reset_date", "") != ""
+    assert len(main.get_tasks(is_daily_view=True)) == 0
+    assert any(a[1] == "Do zamknięcia" for a in main.get_completed_archive())
+
+
+def test_ota_rollback_and_failed_version(tmp_path, monkeypatch):
+    ota_logic = tmp_path / "app_logic_ota.py"
+    ota_prev = tmp_path / "app_logic_ota.prev.py"
+    ota_ver = tmp_path / "ota_version.txt"
+    ota_prev_ver = tmp_path / "ota_prev_version.txt"
+    ota_failed = tmp_path / "ota_failed_version.txt"
+
+    monkeypatch.setattr(main, "OTA_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "OTA_LOGIC_FILE", str(ota_logic))
+    monkeypatch.setattr(main, "OTA_PREV_LOGIC_FILE", str(ota_prev))
+    monkeypatch.setattr(main, "OTA_VERSION_FILE", str(ota_ver))
+    monkeypatch.setattr(main, "OTA_PREV_VERSION_FILE", str(ota_prev_ver))
+    monkeypatch.setattr(main, "OTA_FAILED_VERSION_FILE", str(ota_failed))
+
+    # Symulacja: nowy kod jest zepsuty, ale mamy kopię poprzedniej wersji.
+    ota_logic.write_text("def broken(:\n", encoding="utf-8")
+    ota_prev.write_text("# poprzednia wersja\n", encoding="utf-8")
+    ota_ver.write_text("9.9.9", encoding="utf-8")
+    ota_prev_ver.write_text("1.0.0", encoding="utf-8")
+
+    main.mark_failed_ota_version("9.9.9")
+    assert main.get_failed_ota_version() == "9.9.9"
+
+    assert main.rollback_ota() is True
+    assert ota_logic.read_text(encoding="utf-8") == "# poprzednia wersja\n"
+    assert ota_ver.read_text(encoding="utf-8") == "1.0.0"
+
+    main.clear_failed_ota_version()
+    assert main.get_failed_ota_version() == ""
+
+
+def test_init_db_does_not_touch_cloud_timestamp():
+    # Start aplikacji nie może udawać zmiany danych — inaczej pull z chmury
+    # zawsze uzna lokalną bazę za nowszą i nigdy nic nie pobierze.
+    main.set_config("db_last_change", "2000-01-01T00:00:00")
+    main.init_db()
+    assert main.get_config("db_last_change") == "2000-01-01T00:00:00"
 
 
 if __name__ == "__main__":
