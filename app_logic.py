@@ -1586,7 +1586,8 @@ def main(page: ft.Page):
                     ft.Row([
                         ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE,
                                   on_click=trigger_manual_ota),
-                        ft.Container(expand=True),
+                        # Spacer (nie expand - nie tworzymy pustego obszaru na PC)
+                        ft.Container(width=15),
                         ft.Button("🛑 Zamknij aplikację (Wymuś restart)", bgcolor="#ef444422", color=COLOR_PRIO_A,
                                   on_click=lambda e: os._exit(0))
                     ], wrap=True, spacing=10)
