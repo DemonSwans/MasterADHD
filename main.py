@@ -169,32 +169,67 @@ def load_and_run(page: ft.Page):
     try:
         # 2. Jeśli mamy pobrany nowszy moduł w pamięci podręcznej OTA -> ładujemy go od razu!
         page.controls.clear()
-        target_ota = OTA_LOGIC_FILE
-        if not os.path.exists(target_ota):
-            base_env = os.environ.get("FLET_APP_STORAGE_DATA")
-            if base_env:
-                alt_ota = os.path.join(base_env, "data", "app_logic_ota.py")
-                if os.path.exists(alt_ota):
-                    target_ota = alt_ota
-
+        
+        # PRIORITY: OTA cache > Folder data > Wbudowany kod
+        target_ota = None
+        
+        # Spróbuj najpierw z repozytorium (aktualny kod z GitHub)
+        if updated and os.path.exists(OTA_LOGIC_FILE):
+            print(f"[OTA] Priorytet 1: Ładowanie z OTA cache {OTA_LOGIC_FILE}")
+            target_ota = OTA_LOGIC_FILE
+        
+        # Fallback 1: Sprawdź folder data w App Data (Android)
+        if not target_ota and base_env:
+            alt_ota = os.path.join(base_env, "data", "app_logic_ota.py")
+            if os.path.exists(alt_ota):
+                print(f"[OTA] Priorytet 2: Ładowanie z Alt OTA {alt_ota}")
+                target_ota = alt_ota
+        
+        # Fallback 2: Sprawdź główny folder OTA (starsze wersje main.py)
+        if not target_ota and os.path.exists(OTA_LOGIC_FILE):
+            print(f"[OTA] Priorytet 3: Ładowanie z OTA cache {OTA_LOGIC_FILE}")
+            target_ota = OTA_LOGIC_FILE
+        
+        # Fallback 3: Sprawdź wersję w folderze projektu (repozytorium lokalne)
+        repo_logic = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_logic.py")
+        if not target_ota and os.path.exists(repo_logic):
+            print(f"[OTA] Priorytet 4: Ładowanie z repozytorium {repo_logic}")
+            target_ota = repo_logic
+        
+        # Fallback 4: Sprawdź wbudowany kod (ostatnia deska ratunku)
+        if not target_ota:
+            print("[OTA] Priorytet 5: Ładowanie WBUDOWANEGO app_logic.py (Najgorsze)")
+            try:
+                import app_logic
+                # Wydruk wersji z wbudowanego modułu dla debugowania
+                print(f"[OTA DEBUG] Wbudowany APP_VERSION = {getattr(app_logic, 'APP_VERSION', 'UNKNOWN')}")
+                target_ota = None  # Pozwól na import przez sys.modules
+            except Exception as e:
+                print(f"[OTA] Błąd przy ładowaniu wbudowanego: {e}")
+        
         # Jeśli kod został pobrany (updated=True) -> od razu ładujemy nowy kod bez sprawdzania pliku wersji!
-        if updated:
-            print(f"[OTA] Ładowanie najnowszej pobranej wersji v{new_ver}")
-            spec = importlib.util.spec_from_file_location("app_logic_ota", OTA_LOGIC_FILE)
+        if updated and target_ota:
+            print(f"[OTA] ŁADOWANIE NOWEJ WERSJI v{new_ver} z {target_ota}")
+            spec = importlib.util.spec_from_file_location("app_logic_ota", target_ota)
             mod = importlib.util.module_from_spec(spec)
             sys.modules["app_logic"] = mod
             spec.loader.exec_module(mod)
             mod.main(page)
-        elif os.path.exists(target_ota):
-            print(f"[OTA] Ładowanie zaktualizowanego modułu z {target_ota}")
+        elif updated and not target_ota:
+            # updated=True ale brak pliku - spróbuj ponownie z repozytorium
+            print(f"[OTA] updated=True ale brak OTA pliku! Spróbuję wbudowanego...")
+            import app_logic
+            app_logic.main(page)
+        elif target_ota:
+            print(f"[OTA] Ładowanie pobranego modułu z {target_ota}")
             spec = importlib.util.spec_from_file_location("app_logic_ota", target_ota)
             mod = importlib.util.module_from_spec(spec)
             sys.modules["app_logic"] = mod
             spec.loader.exec_module(mod)
             mod.main(page)
         else:
-            # 3. Wersja bazowa wbudowana w projekt
-            print("[OTA] Ładowanie wbudowanego modułu app_logic")
+            # 3. Wersja bazowa wbudowana w projekt (tylko jak brakuje OTA plików!)
+            print("[OTA] ⚠️ Brak OTA plików - ładuję WBUDOWANY app_logic.py")
             import app_logic
             app_logic.main(page)
 
