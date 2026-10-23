@@ -1584,7 +1584,7 @@ def main(page: ft.Page):
                     ], spacing=8),
                     ft.Text(f"Wersja wbudowana: v{APP_VERSION} | Aktywna: v{current_ver}", size=12, color=COLOR_TEXT_SECONDARY),
                     ft.Row([
-                        ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE,
+                        ft.Button("🔄 Sprawdź i wymuś aktualizację z GitHuba", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
                                   on_click=trigger_manual_ota),
                         # Spacer (nie expand - nie tworzymy pustego obszaru na PC)
                         ft.Container(width=15),
