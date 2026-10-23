@@ -1257,6 +1257,9 @@ COLOR_PRIO_C = "#3b82f6"
 COLOR_SUCCESS = "#10b981"
 COLOR_TEXT_PRIMARY = "#f0f6fc"
 COLOR_TEXT_SECONDARY = "#8b949e"
+# Kolory słońca dla daily
+COLOR_SUN_ACTIVE = "#facc15"   # żółte (aktywne na daily)
+COLOR_SUN_INACTIVE = "#6b7280" # szare (nieaktywne)
 
 # --- INTERFEJS (Flet) ---
 def main(page: ft.Page):
@@ -1283,6 +1286,8 @@ def main(page: ft.Page):
 
     current_view = "daily"
     max_a_limit = int(get_config("max_a_limit", "3"))
+    # Tryb dodawania do Daily: "drag" (przeciągnij) lub "tap" (kliknij słońce)
+    daily_add_mode = get_config("daily_add_mode", "drag")
     open_prio_task_id = None
     active_drag_task_id = None
     active_subtask_idx_map = {}
@@ -2410,6 +2415,40 @@ def main(page: ft.Page):
                 ], spacing=8)
             )
 
+            # --- NOWA KARTA: Tryb dodawania do Daily (Drag vs Tap) ---
+            def toggle_daily_add_mode(e):
+                new_mode = "tap" if e.control.value else "drag"
+                set_config("daily_add_mode", new_mode)
+                refresh_view()
+
+            card_daily_mode = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.WB_SUNNY_OUTLINED, size=18, color=COLOR_PRIO_B),
+                        ft.Text("Dodawanie do Daily (Słońce)", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
+                    ], spacing=8),
+                    ft.Text(
+                        "Wybierz, jak dodawać zadania z Master listy na Daily:",
+                        size=12, color=COLOR_TEXT_SECONDARY
+                    ),
+                    ft.Row([
+                        ft.Text("Przeciągnij (Drag & Drop)", size=13, color=COLOR_TEXT_PRIMARY, expand=True),
+                        ft.Switch(
+                            value=get_config("daily_add_mode", "drag") == "tap",
+                            active_color=COLOR_PRIO_B,
+                            on_change=toggle_daily_add_mode,
+                            tooltip="Włączony = Kliknij słońce | Wyłączony = Przeciągnij słońce"
+                        ),
+                        ft.Text("Kliknij słońce (Tap)", size=13, color=COLOR_TEXT_PRIMARY),
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                    ft.Text(
+                        "💡 Słońce przy zadaniu: żółte = na Daily, szare = nie na Daily. Zadanie zostaje na obu listach.",
+                        size=11, color=COLOR_TEXT_SECONDARY
+                    ),
+                ], spacing=8)
+            )
+
             def handle_export_json(e):
                 ok, path = export_database_to_json_file()
                 if ok:
@@ -2475,6 +2514,7 @@ def main(page: ft.Page):
                 ota_restart_hint,
                 card_ota,
                 card_sound,
+                card_daily_mode,
                 card_backup,
                 card_routines,
                 card_limits,
@@ -2683,30 +2723,59 @@ def main(page: ft.Page):
                             on_click=lambda e, tid=task_id, np=other_p, idm=is_daily_mode: change_priority(tid, np, idm)
                         ))
 
-            # Ergonomiczny uchwyt przeciągania
+            # Ergonomiczny uchwyt przeciągania / słońce Daily
             handle_w = 34 if mob else 30
-            drag_handle = ft.Draggable(
-                group="tasks",
-                data=str(task_id),
-                content=ft.Container(
-                    content=ft.Icon(ft.Icons.DRAG_INDICATOR, size=18, color=COLOR_TEXT_SECONDARY),
+            sun_color = COLOR_SUN_ACTIVE if is_daily else COLOR_SUN_INACTIVE
+            sun_icon = ft.Icon(ft.Icons.WB_SUNNY, size=18, color=sun_color)
+            
+            if daily_add_mode == "tap":
+                # Tryb TAP: kliknięcie słońca przełącza is_daily
+                def toggle_daily_on_tap(e, tid=task_id, current_daily=is_daily):
+                    new_daily = 0 if current_daily else 1
+                    # Sprawdź limit A na Daily
+                    if new_daily == 1:
+                        prio = get_task_priority(tid)
+                        if prio == "A" and count_daily_priority_a() >= max_a_limit:
+                            warning_text.value = f"⚠️ Blokada: Masz już {max_a_limit} zadania 'A' na Daily!"
+                            page.update()
+                            return
+                    set_daily_db(tid, new_daily)
+                    status_text.value = "✓ Dodano do Daily" if new_daily else "✓ Usunięto z Daily"
+                    warning_text.value = ""
+                    refresh_view()
+                
+                drag_handle = ft.Container(
+                    content=sun_icon,
                     width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8,
                     alignment=ft.Alignment.CENTER,
-                    tooltip="Przeciągnij zadanie"
-                ),
-                content_when_dragging=ft.Container(
-                    width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8, opacity=0.3
-                ),
-                content_feedback=ft.Container(
-                    padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-                    bgcolor=COLOR_BG_CARD,
-                    border=ft.Border.all(1, COLOR_PRIO_B),
-                    border_radius=10,
-                    shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.BLACK_54),
-                    content=ft.Text(title, color=COLOR_TEXT_PRIMARY, weight=ft.FontWeight.BOLD, size=14)
-                ),
-                on_drag_start=lambda e, tid=task_id: set_active_drag(tid)
-            )
+                    tooltip="Kliknij, aby dodać/usunąć z Daily" if not is_daily else "Kliknij, aby usunąć z Daily",
+                    on_click=toggle_daily_on_tap,
+                    ink=True
+                )
+            else:
+                # Tryb DRAG: przeciągnij słońce na nawigację Daily/Master
+                drag_handle = ft.Draggable(
+                    group="tasks",
+                    data=str(task_id),
+                    content=ft.Container(
+                        content=sun_icon,
+                        width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8,
+                        alignment=ft.Alignment.CENTER,
+                        tooltip="Przeciągnij na Daily/Master"
+                    ),
+                    content_when_dragging=ft.Container(
+                        width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8, opacity=0.3
+                    ),
+                    content_feedback=ft.Container(
+                        padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                        bgcolor=COLOR_BG_CARD,
+                        border=ft.Border.all(1, COLOR_PRIO_B),
+                        border_radius=10,
+                        shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.BLACK_54),
+                        content=ft.Text(title, color=COLOR_TEXT_PRIMARY, weight=ft.FontWeight.BOLD, size=14)
+                    ),
+                    on_drag_start=lambda e, tid=task_id: set_active_drag(tid)
+                )
 
             if is_daily_mode:
                 if subtasks:
