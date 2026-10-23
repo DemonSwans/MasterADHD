@@ -6,8 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="pls">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/version.txt" beforeDir="false" afterPath="$PROJECT_DIR$/version.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -52,23 +50,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.9299388538268165" />
-      <entry key="MS500" value="5.078065636977116" />
-      <entry key="S2" value="12.292130196038055" />
-      <entry key="S5" value="19.18229825787808" />
-      <entry key="S10" value="24.789682579517027" />
-      <entry key="S30" value="32.91087811216656" />
-      <entry key="S60" value="37.59968899612574" />
-      <entry key="M2" value="42.508999337166294" />
-      <entry key="M5" value="47.73547939044281" />
-      <entry key="M10" value="50.37329545612168" />
-      <entry key="M15" value="53.29304052700532" />
-      <entry key="M30" value="79.10657616778681" />
-      <entry key="H1" value="163.31531012030118" />
-      <entry key="H2" value="298.76554713474013" />
-      <entry key="H4" value="496.3639781382078" />
-      <entry key="D1" value="2691.3861065692536" />
-      <entry key="W1" value="4469.401936598338" />
+      <entry key="MS100" value="1.599513129142557" />
+      <entry key="MS500" value="3.63878635631818" />
+      <entry key="S2" value="5.685447407534639" />
+      <entry key="S5" value="6.413805460182655" />
+      <entry key="S10" value="6.697207146261984" />
+      <entry key="S30" value="7.27980143708543" />
+      <entry key="S60" value="10.092144742105477" />
+      <entry key="M2" value="22.05001430436065" />
+      <entry key="M5" value="61.16128214183903" />
+      <entry key="M10" value="115.94419177803499" />
+      <entry key="M15" value="153.80860688666846" />
+      <entry key="M30" value="225.0001351095665" />
+      <entry key="H1" value="331.98649841022495" />
+      <entry key="H2" value="485.05494194464404" />
+      <entry key="H4" value="697.3093366723876" />
+      <entry key="D1" value="2902.6230479157603" />
+      <entry key="W1" value="4706.5052161725225" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -90,23 +88,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.8559118811500204" />
-      <entry key="MS500" value="5.038192715698654" />
-      <entry key="S2" value="12.268567514640065" />
-      <entry key="S5" value="19.167754260080827" />
-      <entry key="S10" value="24.78032657593215" />
-      <entry key="S30" value="32.906751004856176" />
-      <entry key="S60" value="37.59733843417311" />
-      <entry key="M2" value="42.50767645061535" />
-      <entry key="M5" value="47.73488796107668" />
-      <entry key="M10" value="50.37298420582682" />
-      <entry key="M15" value="53.29282207779115" />
-      <entry key="M30" value="79.10640694369417" />
-      <entry key="H1" value="163.3149753241765" />
-      <entry key="H2" value="298.7649260647282" />
-      <entry key="H4" value="496.36330312396194" />
-      <entry key="D1" value="2691.385805188641" />
-      <entry key="W1" value="4469.401878955621" />
+      <entry key="MS100" value="1.5535106211383074" />
+      <entry key="MS500" value="3.6161653332829338" />
+      <entry key="S2" value="5.676667353744555" />
+      <entry key="S5" value="6.4098573154858105" />
+      <entry key="S10" value="6.695148557661552" />
+      <entry key="S30" value="7.279057564994551" />
+      <entry key="S60" value="10.091620713105264" />
+      <entry key="M2" value="22.049415895072517" />
+      <entry key="M5" value="61.1605981057369" />
+      <entry key="M10" value="115.94353573348118" />
+      <entry key="M15" value="153.80802418138512" />
+      <entry key="M30" value="224.99970087089176" />
+      <entry key="H1" value="331.9860504754263" />
+      <entry key="H2" value="485.05429780956894" />
+      <entry key="H4" value="697.3086532375457" />
+      <entry key="D1" value="2902.622740595135" />
+      <entry key="W1" value="4706.505157258087" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -165,7 +163,7 @@
       <workItem from="1792511515323" duration="7224000" />
       <workItem from="1792677019044" duration="6164000" />
       <workItem from="1792698745129" duration="998000" />
-      <workItem from="1792699759228" duration="9290000" />
+      <workItem from="1792699759228" duration="11027000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -558,7 +556,7 @@
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792777543390" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/MasterADHD$main.coverage" NAME="main Coverage Results" MODIFIED="1792779282044" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/MasterADHD$test_app.coverage" NAME="test_app Coverage Results" MODIFIED="1792167685655" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/MasterADHD$generate_icon.coverage" NAME="generate_icon Coverage Results" MODIFIED="1792418367596" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
