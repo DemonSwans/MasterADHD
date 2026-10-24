@@ -28,9 +28,17 @@ jobs:
 
       - name: Instalacja bibliotek
         run: |
-          pip install flet pytest
+          pip install flet==1.0.4 pytest
 
-      # Używamy APP_VERSION z app_logic.py który już czyta wersję z version.txt (nie ma potrzeby podmiany FALLBACK_VERSION)
+      # Numer wersji (versionName/versionCode) musi rosnąć, inaczej Android
+      # odmawia instalacji nowego APK na urządzeniu z poprzednią wersją.
+      - name: Odczytaj wersję aplikacji
+        id: app_version
+        run: |
+          VERSION=$(tr -d '[:space:]' < version.txt)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=1$(echo "$VERSION" | tr -d '.')" >> "$GITHUB_OUTPUT"
+          echo "Buduję Master ADHD v$VERSION"
 
       - name: Uruchom testy (pytest)
         run: pytest test_app.py -v
@@ -41,7 +49,10 @@ jobs:
           rm -rf ~/.gradle/caches/
 
       - name: Budowanie APK (64-bit)
-        run: yes | flet build apk --arch arm64-v8a --project "MasterADHD" --no-default-excludes
+        run: |
+          yes | flet build apk --arch arm64-v8a --project "MasterADHD" --no-default-excludes \
+            --build-version "${{ steps.app_version.outputs.version }}" \
+            --build-number "${{ steps.app_version.outputs.code }}"
 
       - name: Zmień nazwę na stałą
         run: find build/apk -name "*.apk" -exec mv {} MasterADHD.apk \;

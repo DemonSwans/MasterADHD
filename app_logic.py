@@ -19,7 +19,9 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.9"
+FALLBACK_VERSION = "1.6.19"
+# Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
 def get_app_dir():
@@ -92,50 +94,48 @@ def is_newer_version(remote_ver: str, local_ver: str) -> bool:
 
 
 # --- ODCZYT WERSJI ---
-def get_bundled_version():
-    """Wersja plików wbudowanych w aplikację (niezmieniana przez OTA)."""
+def _read_version_file(path):
     try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        for name in ("version.txt", "ota_version.txt"):
-            path = os.path.join(base_dir, name)
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    val = f.read().strip()
-                if val:
-                    return val
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
     except Exception:
         pass
+    return ""
+
+
+def get_bundled_version():
+    """Wersja kodu wbudowanego w APK (niezmieniana przez OTA).
+
+    main.py ustawia zmienną MASTER_ADHD_BUNDLED_VERSION przed uruchomieniem
+    kodu z OTA, dzięki czemu Ustawienia pokazują prawdziwą wersję wbudowaną,
+    nawet gdy działa nowszy plik z folderu danych.
+    """
+    env_version = (os.environ.get("MASTER_ADHD_BUNDLED_VERSION") or "").strip()
+    if env_version:
+        return env_version
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    for name in ("version.txt", "ota_version.txt"):
+        val = _read_version_file(os.path.join(base_dir, name))
+        if val:
+            return val
     return FALLBACK_VERSION
 
 
 def get_local_version():
-    """Zwraca najwyższą znaną wersję lokalną.
+    """Wersja kodu, który aktualnie działa (a nie tego, co leży na dysku).
 
-    Bierzemy maksimum ze wszystkich możliwych źródeł, bo na Androidzie/iOS
-    pliki wbudowane w aplikację są tylko do odczytu i pozostają na starej
-    wersji, a nowy kod leży w folderze danych (~/.master_adhd_data).
+    Czytamy tylko pliki obok modułu: dla kodu wbudowanego to folder APK, dla
+    pobranego OTA — folder danych. Wcześniej braliśmy maksimum także z folderu
+    danych, przez co pobrany (lecz nieuruchomiony) plik zmieniał numer wersji
+    w UI, mimo że wykonywał się stary kod.
     """
-    candidates = []
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        for path in (
-            os.path.join(base_dir, "version.txt"),
-            os.path.join(base_dir, "ota_version.txt"),
-            os.path.join(APP_DIR, "version.txt"),
-            os.path.join(APP_DIR, "ota_version.txt"),
-        ):
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    val = f.read().strip()
-                    if val:
-                        candidates.append(val)
-    except Exception:
-        pass
-
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     best = ""
-    for candidate in candidates:
-        if not best or is_newer_version(candidate, best):
-            best = candidate
+    for name in ("version.txt", "ota_version.txt"):
+        val = _read_version_file(os.path.join(base_dir, name))
+        if val and (not best or is_newer_version(val, best)):
+            best = val
     return best or FALLBACK_VERSION
 
 
@@ -835,6 +835,132 @@ def reset_sync_on_exit():
     """Dopina zaległy zapis. Snapshoty zostają (rotacja), nie są już kasowane."""
     flush_pending_sync(timeout=4.0)
     LOG.info("Zamknięcie aplikacji — snapshoty zachowane")
+
+
+# --- INSTALACJA I AKTYWACJA OTA ---
+def _version_files():
+    """Pliki z numerem wersji, które czyta main.py (muszą zostać w zgodzie)."""
+    return (
+        os.path.join(APP_DIR, "version.txt"),
+        os.path.join(APP_DIR, "ota_version.txt"),
+    )
+
+
+def install_ota_code(new_code, remote_ver):
+    """Zapisuje pobrany kod OTA w folderze danych (atomowo, z kopią .prev).
+
+    Zapisywanie przez plik tymczasowy jest istotne na telefonie: przerwany
+    zapis zostawiał ucięty app_logic_ota.py, który potem wysypywał start.
+    """
+    if not new_code or not remote_ver:
+        return False, "Brak kodu lub numeru wersji w odpowiedzi GitHuba"
+    try:
+        compile(new_code, "app_logic_ota.py", "exec")
+    except SyntaxError as e:
+        return False, f"Błąd składni w pobranym kodzie (odrzucono): {e}"
+
+    target = os.path.join(APP_DIR, "app_logic_ota.py")
+    tmp_path = target + ".tmp"
+    try:
+        os.makedirs(APP_DIR, exist_ok=True)
+        previous_version = get_local_version()
+        if os.path.exists(target):
+            try:
+                shutil.copy2(target, os.path.join(APP_DIR, "app_logic_ota.prev.py"))
+                with open(os.path.join(APP_DIR, "ota_prev_version.txt"), "w", encoding="utf-8") as f:
+                    f.write(previous_version)
+            except Exception as e:
+                LOG.warning("OTA: nie udało się zapisać kopii poprzedniej wersji: %s", e)
+
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(new_code)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp_path, target)
+
+        for path in _version_files():
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(remote_ver)
+
+        failed_path = os.path.join(APP_DIR, "ota_failed_version.txt")
+        if os.path.exists(failed_path):
+            try:
+                os.remove(failed_path)
+            except Exception:
+                pass
+        LOG.info("OTA: zapisano v%s w %s", remote_ver, target)
+        return True, target
+    except Exception as e:
+        LOG.exception("OTA: błąd zapisu nowej wersji")
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        return False, f"Nie udało się zapisać aktualizacji: {e}"
+
+
+def _restore_version_files(version):
+    if not version:
+        return
+    for path in _version_files():
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(version)
+        except Exception:
+            pass
+
+
+def activate_downloaded_ota(page, expected_version=""):
+    """Uruchamia pobrany kod OTA w bieżącym procesie (bez restartu aplikacji).
+
+    Flet na Androidzie/iOS nie potrafi zrestartować własnego procesu, więc
+    podmieniamy cały interfejs: ładujemy plik z folderu danych i wołamy jego
+    `main(page)`. Dzięki temu aktualizacja działa od razu po pobraniu.
+    """
+    target = os.path.join(APP_DIR, "app_logic_ota.py")
+    if not os.path.exists(target):
+        return False, "Brak pobranego pliku app_logic_ota.py"
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            source = f.read()
+        compile(source, target, "exec")
+    except Exception as e:
+        return False, f"Pobrany kod jest niepoprawny: {e}"
+
+    original_app_logic = sys.modules.get("app_logic")
+    original_app_logic_ota = sys.modules.get("app_logic_ota")
+    try:
+        # Nowy moduł musi widzieć wersję wbudowaną (do porównań i podpisu w UI).
+        os.environ.setdefault("MASTER_ADHD_BUNDLED_VERSION", get_bundled_version())
+        spec = importlib.util.spec_from_file_location("app_logic_ota", target)
+        if spec is None or spec.loader is None:
+            return False, "Nie można załadować pobranego modułu"
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["app_logic_ota"] = module
+        sys.modules["app_logic"] = module
+        spec.loader.exec_module(module)
+        if not hasattr(module, "main"):
+            raise AttributeError("Pobrany kod nie zawiera funkcji main(page)")
+
+        # Stary interfejs (i jego okna dialogowe) znika razem z referencjami.
+        page.overlay.clear()
+        page.controls.clear()
+        module.main(page)
+        LOG.info("OTA: aktywna wersja v%s", expected_version or "?")
+        return True, expected_version
+    except Exception as e:
+        LOG.exception("OTA: nie udało się uruchomić pobranego kodu")
+        if original_app_logic is not None:
+            sys.modules["app_logic"] = original_app_logic
+        if original_app_logic_ota is not None:
+            sys.modules["app_logic_ota"] = original_app_logic_ota
+        else:
+            sys.modules.pop("app_logic_ota", None)
+        return False, str(e)
 
 
 # --- BAZA DANYCH I LOGIKA ---
@@ -1545,16 +1671,15 @@ def main(page: ft.Page):
             ota_restart_hint.value = ""
             page.update()
 
-            github_base = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
             ts = int(datetime.now().timestamp())
             headers = {
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
                 "User-Agent": "MasterADHD-OTA/1.0"
             }
-            
-            # Pobierz wersję
-            url_ver = f"{github_base}/version.txt?t={ts}"
+
+            # Pobierz numer wersji
+            url_ver = f"{GITHUB_RAW_BASE}/version.txt?t={ts}"
             req_ver = urllib.request.Request(url_ver, headers=headers)
             try:
                 with urllib.request.urlopen(req_ver, timeout=6, context=get_ssl_context()) as resp:
@@ -1565,11 +1690,17 @@ def main(page: ft.Page):
                 refresh_view()
                 return
 
+            if not remote_ver:
+                warning_text.value = "⚠️ GitHub zwrócił pusty numer wersji."
+                status_text.value = ""
+                refresh_view()
+                return
+
             # Pobierz kod źródłowy
-            url_code = f"{github_base}/app_logic.py?t={ts}"
+            url_code = f"{GITHUB_RAW_BASE}/app_logic.py?t={ts}"
             req_code = urllib.request.Request(url_code, headers=headers)
             try:
-                with urllib.request.urlopen(req_code, timeout=12, context=get_ssl_context()) as resp_code:
+                with urllib.request.urlopen(req_code, timeout=15, context=get_ssl_context()) as resp_code:
                     new_code = resp_code.read().decode("utf-8")
             except Exception as ve:
                 warning_text.value = f"⚠️ Nie udało się pobrać kodu: {ve}"
@@ -1577,71 +1708,54 @@ def main(page: ft.Page):
                 refresh_view()
                 return
 
-            # Weryfikacja składni przed zapisem
+            # Zapisujemy wyłącznie w prywatnym folderze danych aplikacji
+            # (na Androidzie folder APK jest tylko do odczytu).
+            installed_ver = get_local_version()
+            ok_save, save_msg = install_ota_code(new_code, remote_ver)
+            if not ok_save:
+                warning_text.value = f"⚠️ {save_msg}"
+                status_text.value = ""
+                refresh_view()
+                return
+
+            status_text.value = f"✓ Pobrano v{remote_ver}. Uruchamiam nową wersję..."
+            page.update()
+
+            # Dopinamy zaległy zapis starej wersji, zanim podmienimy interfejs.
             try:
-                compile(new_code, "app_logic_ota.py", "exec")
-            except SyntaxError as ce:
-                warning_text.value = f"⚠️ Błąd składni w pobranym kodzie! Został on odrzucony."
-                status_text.value = ""
-                refresh_view()
+                flush_pending_sync(timeout=2.0)
+            except Exception:
+                pass
+
+            ok_activate, activate_msg = activate_downloaded_ota(page, remote_ver)
+            if ok_activate:
+                # Nowy interfejs jest już na ekranie — nie dotykamy starych kontrolek.
                 return
 
-            # Zapisujemy tylko w folderach danych aplikacji. NIE piszemy do folderu
-            # projektu (na PC brudziło to repozytorium git, a na mobile i tak jest
-            # tylko do odczytu). main.py i tak czyta OTA_DIR oraz .../data.
-            targets = [APP_DIR]
-            base_env = os.environ.get("FLET_APP_STORAGE_DATA")
-            if base_env:
-                targets.append(os.path.join(base_env, ".master_adhd_data"))
-                targets.append(os.path.join(base_env, "data"))
-            else:
-                targets.append(os.path.join(os.path.expanduser("~"), ".master_adhd_data"))
-
-            saved_dirs = []
-            for target_dir in set(targets):
-                try:
-                    os.makedirs(target_dir, exist_ok=True)
-                    ota_path = os.path.join(target_dir, "app_logic_ota.py")
-                    # Rollback: zachowujemy poprzednią wersję przed nadpisaniem.
-                    if os.path.exists(ota_path):
-                        try:
-                            shutil.copy2(ota_path, os.path.join(target_dir, "app_logic_ota.prev.py"))
-                        except Exception:
-                            pass
-                    with open(ota_path, "w", encoding="utf-8") as f:
-                        f.write(new_code)
-                    # version.txt jest czytany jako pierwszy, ota_version.txt jako fallback.
-                    # Zapisujemy oba, aby wersja była spójna po restarcie (PC i mobile).
-                    with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
-                        f.write(remote_ver)
-                    with open(os.path.join(target_dir, "ota_version.txt"), "w", encoding="utf-8") as f:
-                        f.write(remote_ver)
-                    saved_dirs.append(target_dir)
-                    LOG.info("OTA: zapisano v%s w %s", remote_ver, target_dir)
-                except Exception as we:
-                    LOG.warning("OTA: błąd zapisu w %s: %s", target_dir, we)
-
-            if not saved_dirs:
-                warning_text.value = ("⚠️ Nie udało się zapisać aktualizacji — brak uprawnień do zapisu "
-                                      "w żadnej z lokalizacji aplikacji.")
-                status_text.value = ""
-                refresh_view()
-                return
-
-            # ŚWIADOMIE NIE restartujemy procesu. Na Androidzie/iOS ubicie procesu
-            # (os._exit / nowy proces) kończy się crashem zamrożeniem UI, bo aplikacja
-            # nie może forknąć samej siebie jak na Windows. Nowy kod i tak wczyta
-            # main.py przy następnym starcie - wystarczy zamknąć i otworzyć aplikację.
-            status_text.value = f"✓ Pobrano v{remote_ver}. Nowa wersja aktywuje się po restarcie."
-            ota_restart_hint.value = (
-                "⚠️ WYMAGANY RĘCZNY RESTART APLIKACJI\n"
-                f"Pobrano wersję v{remote_ver}.\n"
-                "1. Zamknij aplikację (przycisk „🛑 Zamknij aplikację” poniżej lub z listy aplikacji).\n"
-                "2. Otwórz ją ponownie — nowa wersja wczyta się automatycznie."
+            # Nie udało się uruchomić nowego kodu: przywracamy numer wersji i
+            # pokazujemy bezpieczny ekran zamiast połowicznie zbudowanego UI.
+            _restore_version_files(installed_ver)
+            LOG.error("OTA: aktywacja nieudana: %s", activate_msg)
+            page.controls.clear()
+            page.add(
+                ft.SafeArea(
+                    ft.Container(
+                        padding=20,
+                        content=ft.Column([
+                            ft.Text("⚠️ Nie udało się uruchomić pobranej wersji", size=16,
+                                    weight=ft.FontWeight.BOLD, color=COLOR_PRIO_A),
+                            ft.Text(f"Pobrano v{remote_ver}, ale nowy kod zgłosił błąd:\n{activate_msg}",
+                                    size=12, selectable=True),
+                            ft.Text("Zamknij i otwórz aplikację — uruchomi się poprzednia, "
+                                    "działająca wersja (pobrany plik zostanie odrzucony).",
+                                    size=12, color=COLOR_TEXT_SECONDARY),
+                            ft.Button("🔄 Spróbuj ponownie", bgcolor=COLOR_BG_SURFACE,
+                                      color=COLOR_TEXT_PRIMARY, on_click=trigger_manual_ota),
+                        ], spacing=10, scroll=ft.ScrollMode.AUTO)
+                    )
+                )
             )
-            refresh_view()
-
-            LOG.info("OTA: aktualizacja v%s pobrana i zapisana w %s", remote_ver, ", ".join(saved_dirs))
+            page.update()
         except Exception as ex:
             LOG.exception("OTA: błąd aktualizacji")
             warning_text.value = f"⚠️ Błąd aktualizacji OTA: {ex}"

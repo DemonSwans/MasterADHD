@@ -2,6 +2,7 @@ import base64
 import gc
 import json
 import os
+import sys
 import urllib.request
 import pytest
 import flet as ft
@@ -54,6 +55,19 @@ def setup_and_teardown(tmp_path, monkeypatch):
 
     app_logic.LOCAL_DB = main.LOCAL_DB = test_db
     app_logic.CONFIG_DB = main.CONFIG_DB = test_config
+
+    # Cały stan OTA (pliki, logi) ląduje w tmp_path, nie w profilu użytkownika.
+    ota_dir = tmp_path / "ota"
+    ota_dir.mkdir()
+    monkeypatch.setattr(main, "OTA_DIR", str(ota_dir))
+    monkeypatch.setattr(main, "OTA_LOGIC_FILE", str(ota_dir / "app_logic_ota.py"))
+    monkeypatch.setattr(main, "OTA_VERSION_FILE", str(ota_dir / "ota_version.txt"))
+    monkeypatch.setattr(main, "OTA_PREV_LOGIC_FILE", str(ota_dir / "app_logic_ota.prev.py"))
+    monkeypatch.setattr(main, "OTA_PREV_VERSION_FILE", str(ota_dir / "ota_prev_version.txt"))
+    monkeypatch.setattr(main, "OTA_FAILED_VERSION_FILE", str(ota_dir / "ota_failed_version.txt"))
+    monkeypatch.setattr(main, "OTA_LOG_FILE", str(ota_dir / "ota.log"))
+    monkeypatch.delenv("MASTER_ADHD_BUNDLED_VERSION", raising=False)
+    main._PREPARED_CACHE.update({"key": None, "path": None, "version": ""})
 
     main.init_db()
 
@@ -666,6 +680,212 @@ def test_ota_rollback_and_failed_version(tmp_path, monkeypatch):
 
     main.clear_failed_ota_version()
     assert main.get_failed_ota_version() == ""
+
+
+def test_entrypoint_is_not_shadowed():
+    """Regresja: `from app_logic import *` nadpisywało main i OTA nigdy nie działała."""
+    import app_logic
+
+    assert main.main is not app_logic.main
+    assert main.main.__module__ == "main"
+
+
+def test_version_files_are_in_sync():
+    """FALLBACK_VERSION jest awaryjnym numerem w APK — musi zgadzać się z version.txt."""
+    import app_logic
+
+    repo_dir = os.path.dirname(os.path.abspath(main.__file__))
+    with open(os.path.join(repo_dir, "version.txt"), encoding="utf-8") as f:
+        repo_version = f.read().strip()
+    assert app_logic.FALLBACK_VERSION == repo_version
+
+
+def test_disabled_ota_ignores_ota_cache(tmp_path, monkeypatch):
+    """DISABLE_OTA=1 (testy, diagnostyka) nie może uruchamiać pliku z folderu danych."""
+    cache = tmp_path / "app_logic_ota.py"
+    cache.write_text("raise RuntimeError('stary cache nie może się wykonać')\n", encoding="utf-8")
+    (tmp_path / "ota_version.txt").write_text("99.0.0", encoding="utf-8")
+    monkeypatch.setattr(main, "OTA_LOGIC_FILE", str(cache))
+    monkeypatch.setattr(main, "OTA_VERSION_FILE", str(tmp_path / "ota_version.txt"))
+
+    page = DummyPage(width=950)
+    main.load_and_run(page)
+
+    assert isinstance(page.controls[0], ft.SafeArea)
+
+
+def test_newer_ota_cache_is_executed(tmp_path, monkeypatch):
+    """Pobrany, nowszy kod OTA musi faktycznie się uruchomić (nie tylko zmienić numeru)."""
+    cache = tmp_path / "app_logic_ota.py"
+    cache.write_text(
+        "import flet as ft\n\n\n"
+        "def main(page):\n"
+        "    page.controls.clear()\n"
+        "    page.add(ft.Text('NOWY KOD OTA'))\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "ota_version.txt").write_text("99.0.0", encoding="utf-8")
+    monkeypatch.setattr(main, "OTA_LOGIC_FILE", str(cache))
+    monkeypatch.setattr(main, "OTA_VERSION_FILE", str(tmp_path / "ota_version.txt"))
+    monkeypatch.setattr(main, "check_and_download_ota", lambda *a, **k: (False, ""))
+    monkeypatch.delenv("DISABLE_OTA", raising=False)
+
+    original = sys.modules.get("app_logic")
+    try:
+        page = DummyPage(width=950)
+        main.load_and_run(page)
+        assert page.controls[0].value == "NOWY KOD OTA"
+        assert main.get_installed_ota_version() == "99.0.0"
+    finally:
+        sys.modules["app_logic"] = original
+        sys.modules.pop("app_logic_ota", None)
+
+
+def test_older_ota_cache_is_ignored(tmp_path, monkeypatch):
+    """Plik OTA starszy od wbudowanego nie może przesłaniać świeżego kodu z APK."""
+    cache = tmp_path / "app_logic_ota.py"
+    cache.write_text("raise RuntimeError('nie powinno się wykonać')\n", encoding="utf-8")
+    (tmp_path / "ota_version.txt").write_text("0.0.1", encoding="utf-8")
+    monkeypatch.setattr(main, "OTA_LOGIC_FILE", str(cache))
+    monkeypatch.setattr(main, "OTA_VERSION_FILE", str(tmp_path / "ota_version.txt"))
+    monkeypatch.setattr(main, "check_and_download_ota", lambda *a, **k: (False, ""))
+    monkeypatch.delenv("DISABLE_OTA", raising=False)
+
+    page = DummyPage(width=950)
+    main.load_and_run(page)
+
+    assert isinstance(page.controls[0], ft.SafeArea)
+    assert main.get_prepared_ota() == (None, "")
+
+
+def test_manual_ota_install_and_activate(tmp_path, monkeypatch):
+    """Ręczna aktualizacja ma działać od razu, bez restartu aplikacji."""
+    import app_logic
+
+    monkeypatch.setattr(app_logic, "APP_DIR", str(tmp_path))
+    new_code = (
+        "import flet as ft\n\n\n"
+        "def main(page):\n"
+        "    page.controls.clear()\n"
+        "    page.add(ft.Text('AKTYWNE OTA'))\n"
+    )
+    ok, msg = app_logic.install_ota_code(new_code, "99.1.0")
+    assert ok is True, msg
+    assert (tmp_path / "app_logic_ota.py").exists()
+    assert (tmp_path / "version.txt").read_text(encoding="utf-8") == "99.1.0"
+    assert (tmp_path / "ota_version.txt").read_text(encoding="utf-8") == "99.1.0"
+
+    original = sys.modules.get("app_logic")
+    try:
+        page = DummyPage(width=950)
+        ok_activate, _ = app_logic.activate_downloaded_ota(page, "99.1.0")
+        assert ok_activate is True
+        assert page.controls[0].value == "AKTYWNE OTA"
+        assert sys.modules["app_logic"] is not original
+    finally:
+        sys.modules["app_logic"] = original
+        sys.modules.pop("app_logic_ota", None)
+
+
+def test_install_ota_rejects_broken_code(tmp_path, monkeypatch):
+    import app_logic
+
+    monkeypatch.setattr(app_logic, "APP_DIR", str(tmp_path))
+    ok, msg = app_logic.install_ota_code("def zepsuty(:\n", "9.9.9")
+    assert ok is False
+    assert "składni" in msg
+    assert not (tmp_path / "app_logic_ota.py").exists()
+
+
+def _iter_controls(control):
+    yield control
+    content = getattr(control, "content", None)
+    if content is not None and not isinstance(content, str):
+        yield from _iter_controls(content)
+    for child in getattr(control, "controls", None) or []:
+        yield from _iter_controls(child)
+
+
+def _contains_label(control, needle):
+    for item in _iter_controls(control):
+        label = getattr(item, "content", None)
+        if isinstance(label, str) and needle in label:
+            return True
+        value = getattr(item, "value", None)
+        if isinstance(value, str) and needle in value:
+            return True
+    return False
+
+
+def _find_clickable(root, needle):
+    """Najbliższa klikalna kontrolka, której napis zawiera `needle`."""
+    if callable(getattr(root, "on_click", None)) and _contains_label(root, needle):
+        return root
+    content = getattr(root, "content", None)
+    if content is not None and not isinstance(content, str):
+        found = _find_clickable(content, needle)
+        if found is not None:
+            return found
+    for child in getattr(root, "controls", None) or []:
+        found = _find_clickable(child, needle)
+        if found is not None:
+            return found
+    return None
+
+
+def test_settings_ota_button_swaps_interface(tmp_path, monkeypatch):
+    """Klik „Sprawdź i wymuś aktualizację” ma podmienić interfejs, a nie tylko numer wersji."""
+    import app_logic
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    settings_nav = _find_clickable(page.controls[0], "Ustawienia")
+    assert settings_nav is not None
+    settings_nav.on_click(None)
+
+    update_btn = _find_clickable(page.controls[0], "Sprawdź i wymuś aktualizację")
+    assert update_btn is not None and callable(update_btn.on_click)
+
+    monkeypatch.setattr(app_logic, "APP_DIR", str(tmp_path))
+    new_code = (
+        "import flet as ft\n\n\n"
+        "def main(page):\n"
+        "    page.controls.clear()\n"
+        "    page.add(ft.Text('NOWA WERSJA Z OTA'))\n"
+    )
+
+    class Resp:
+        status = 200
+        headers = {}
+
+        def __init__(self, data):
+            self._data = data
+
+        def read(self):
+            return self._data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=5, context=None):
+        if "version.txt" in req.full_url:
+            return Resp(b"99.2.0")
+        return Resp(new_code.encode("utf-8"))
+
+    monkeypatch.setattr(app_logic.urllib.request, "urlopen", fake_urlopen)
+
+    original = sys.modules.get("app_logic")
+    try:
+        update_btn.on_click(None)
+    finally:
+        sys.modules["app_logic"] = original
+        sys.modules.pop("app_logic_ota", None)
+
+    assert page.controls[0].value == "NOWA WERSJA Z OTA"
 
 
 def test_init_db_does_not_touch_cloud_timestamp():

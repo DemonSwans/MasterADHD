@@ -7,23 +7,23 @@ Osobisty menedżer zadań dla osób z ADHD: **Python + Flet 1.0.4 + SQLite**, dz
 ## Komendy
 
 ```powershell
-python -m pytest test_app.py -q                       # całość (25 testów, ~4 s)
+python -m pytest test_app.py -q                       # całość (33 testy, ~4 s)
 python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 .\.venv\Scripts\flet.exe run main.py                  # uruchomienie na PC
 ```
 
-- Brak `requirements.txt`/`pyproject.toml` — CI instaluje `flet` i `pytest` bez przypięcia wersji. Lokalnie `flet==1.0.4` jest i w globalnym Pythonie, i w `.venv`, ale CLI `flet` nie jest na PATH (tylko `.venv\Scripts\flet.exe`).
+- Brak `requirements.txt`/`pyproject.toml` — CI instaluje `flet==1.0.4` (przypięte, bo składnia UI zależy od wersji) i `pytest`. Lokalnie `flet==1.0.4` jest i w globalnym Pythonie, i w `.venv`, ale CLI `flet` nie jest na PATH (tylko `.venv\Scripts\flet.exe`).
 - Używaj API Flet 1.x: `ft.Colors.*`, `ft.Icons.*`, `ft.Button`, `ft.Alignment(x, y)`, `ft.Padding.symmetric(...)`. W 1.0.4 nie ma już `ft.colors` ani `ft.ElevatedButton` (a `ft.icons` / `ft.alignment` to tylko aliasy) — mimo że tak wygląda większość przykładów w sieci.
-- CI (`.github/workflows/build.yml`), tylko przy pushu na `master`: `pytest test_app.py -v` → `flet build apk --arch arm64-v8a --project MasterADHD --no-default-excludes` → Release `latest`.
+- CI (`.github/workflows/build.yml`), tylko przy pushu na `master`: `pytest test_app.py -v` → `flet build apk --arch arm64-v8a --project MasterADHD --no-default-excludes --build-version <version.txt> --build-number 1<wersja bez kropek>` → Release `latest`. Bez rosnącego `versionCode` Android odmawia instalacji APK na urządzeniu z poprzednią wersją.
 
 ## Mapa plików
 
 | Plik | Odpowiedzialność |
 |---|---|
-| `main.py` | Entrypoint: OTA z GitHuba, splash, import `app_logic` (cache OTA albo wbudowany), rollback, ekran błędu. Na końcu `from app_logic import *` dla testów. |
-| `app_logic.py` | ~3400 linii: schemat i operacje SQLite, konfiguracja, snapshoty, backup/import JSON, synchronizacja (Gist/HA/folder), logowanie oraz cały interfejs Flet w `main(page)`. |
-| `test_app.py` | 25 testów: CRUD, podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile, rollback OTA. `DummyPage` + tymczasowe bazy. |
-| `version.txt` | Aktualna wersja (1.6.18). Czytana przez `app_logic` i OTA. |
+| `main.py` | Entrypoint: OTA z GitHuba, splash, wybór modułu (`app_logic_ota.py` albo wbudowany `app_logic`), rollback, ekran błędu. Na końcu re-eksport symboli `app_logic` **bez** `main` (dawniej `from app_logic import *` nadpisywał entrypoint). |
+| `app_logic.py` | ~3600 linii: schemat i operacje SQLite, konfiguracja, snapshoty, backup/import JSON, synchronizacja (Gist/HA/folder), logowanie, instalacja/aktywacja OTA oraz cały interfejs Flet w `main(page)`. |
+| `test_app.py` | 33 testy: CRUD, podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile, OTA (wybór wersji, instalacja, aktywacja, rollback). `DummyPage` + tymczasowe bazy. |
+| `version.txt` | Aktualna wersja (1.6.19). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
 | `.github/workflows/build.yml` | CI: pytest → APK → Release `latest`. |
 | `assets/icon.png` | Ikona aplikacji. |
 | `FIX_SUMMARY.md`, `README_OTA_FIX.md` | Historyczne, opisują stan 1.6.17 — nieaktualne. |
@@ -34,13 +34,15 @@ Artefakty tylko lokalne (gitignore, nie są źródłem): `app_logic_ota.py`, `ot
 ## Przepływ
 
 ```text
-main.py::main → load_and_run()
-  ├─ check_and_download_ota()   → GitHub raw: version.txt + app_logic.py
-  ├─ app_logic_ota.py / .prev / ota_failed_version.txt (w folderze danych)
-  └─ import modułu → app_logic.main(page)
+main.py::main → load_and_run()          (jedyny loader; nie ma drugiej ścieżki)
+  ├─ splash + check_and_download_ota()  → GitHub raw: version.txt + app_logic.py
+  ├─ get_prepared_ota()                 → app_logic_ota.py, tylko gdy nowszy od wbudowanego
+  ├─ _run_app_logic()                   → import modułu (OTA albo wbudowany)
+  └─ app_logic.main(page)
        ├─ init_db() (+ init_config_db())
        ├─ refresh_view() → przebudowa kontrolek
        ├─ akcje → db_connection(write=True) → push_database_async()
+       ├─ Ustawienia → trigger_manual_ota() → install_ota_code() + activate_downloaded_ota()
        └─ wątek startup_pull → pull_database(force=False)
 ```
 
@@ -65,12 +67,18 @@ Trzy tryby w `config["sync_mode"]`: `gist`, `ha_server`, `folder` (domyślnie `n
 
 ### OTA
 
-- Źródło: `https://raw.githubusercontent.com/DemonSwans/MasterADHD/master`.
+- Źródło: `GITHUB_RAW_BASE` — ta sama wartość w `main.py` i `app_logic.py` (`https://raw.githubusercontent.com/DemonSwans/MasterADHD/master`).
 - **Skutek uboczny**: każdy push `app_logic.py` / `version.txt` na `master` trafia do użytkowników przez OTA, niezależnie od wydania APK.
-- `get_local_version()` bierze **maksimum** z `version.txt`/`ota_version.txt` w repo i w folderze danych → podnoszenie wersji rób w `version.txt`; `FALLBACK_VERSION` (1.6.9) jest tylko awaryjne.
-- Pobrany kod jest sprawdzany przez `compile()`, zapisywany jako `app_logic_ota.py`, poprzedni jako `app_logic_ota.prev.py` + `ota_prev_version.txt`.
+- Dwie ścieżki, jedna implementacja:
+  - start: `main.load_and_run()` → `check_and_download_ota()` → `get_prepared_ota()` → `_run_app_logic()`;
+  - Ustawienia: `trigger_manual_ota()` → `install_ota_code()` → `activate_downloaded_ota()` (podmiana UI w tym samym procesie, bez restartu).
+- **Kod OTA uruchamiany jest tylko wtedy, gdy jest nowszy od wbudowanego** (`is_newer_version(ota_ver, get_bundled_version())`). Stary plik z folderu danych nie przesłania świeżego kodu z APK. Dodatkowo musi się kompilować i nie być wpisany w `ota_failed_version.txt`.
+- `get_local_version()` czyta pliki wersji **tylko obok działającego modułu** (`__file__`), a `get_installed_ota_version()` w `main.py` zwraca wersję kodu, który faktycznie się uruchomi. Numer w UI nie może pochodzić z pliku, którego nie wykonano.
+- `main.py` przekazuje wersję wbudowaną przez `MASTER_ADHD_BUNDLED_VERSION`, żeby podpis w Ustawieniach był prawdziwy także pod kodem OTA.
+- Pobieranie jest atomowe (`.tmp` + `os.replace` + `fsync`), poprzednia wersja → `app_logic_ota.prev.py` + `ota_prev_version.txt`. Log OTA: `OTA_DIR/ota.log` (na Androidzie `print()` ginie).
 - Błąd startu → `rollback_ota()`; wadliwa wersja → `ota_failed_version.txt` (blokada ponownego pobrania).
-- Testy ustawiają `DISABLE_OTA=1` — nie usuwaj tego z fixture.
+- Podnosząc wersję: zmień `version.txt` **oraz** `FALLBACK_VERSION` w `app_logic.py` (test `test_version_files_are_in_sync` tego pilnuje).
+- `DISABLE_OTA=1` wyłącza OTA całkowicie (sieć **i** cache) — testy tego wymagają, nie usuwaj z fixture.
 
 ## Zasady dla agentów
 
@@ -78,13 +86,14 @@ Trzy tryby w `config["sync_mode"]`: `gist`, `ha_server`, `folder` (domyślnie `n
 - `is_mobile()` to szerokość < 650 px (`page.width` lub `page.window.width`); testy używają 950 (PC) i 400 (mobile). PC: `Row(sidebar, content_area)`, mobile: `Column(content_area, bottom_nav)`.
 - `page.overlay` ma 9 dialogów; kolejność jest kontraktem testów (`[3]` edycja zadania, `[4]` usuwanie, `[5]` edycja podkroku) — nowe okna tylko na końcu listy.
 - Korzeń to `page.controls[0]` (SafeArea) → `.content` (`root_layout`) → `.content` (`Row`/`Column`). Testy indeksują dalej: sidebar `controls[1]` Daily, `[2]` Master, `[3]` Dziennik; dolna nawigacja `[0]` Daily, `[1]` Master, `[2]` Dziennik (test mylnie nazywa ją `settings_mob_box`), `[3]` Ustawienia; `content_area` to `Row[2]` na PC i `Column[0]` na mobile.
-- Nowe testy dopisuj do `test_app.py`; autouse fixture przekierowuje bazy do `tmp_path` przez `app_logic.LOCAL_DB`/`CONFIG_DB` (patchuj `app_logic`, nie tylko `main`), więc nie pisz do folderu użytkownika.
+- Nowe testy dopisuj do `test_app.py`; autouse fixture przekierowuje bazy do `tmp_path` przez `app_logic.LOCAL_DB`/`CONFIG_DB` (patchuj `app_logic`, nie tylko `main`) **oraz wszystkie ścieżki OTA z `main`** (`OTA_DIR`, `OTA_*_FILE`, reset `_PREPARED_CACHE`), więc nie pisz do folderu użytkownika.
 - Nie zapisuj plików OTA do folderu repozytorium — tylko do folderu danych.
+- `main.py` jest zamrożony w APK: zmiana w nim działa dopiero po zainstalowaniu nowego APK. Zmiany w `app_logic.py` docierają przez OTA.
 
 ## Znane pułapki (stan obecny)
 
-- **`from app_logic import *` na końcu `main.py` nadpisuje `main`.** `ft.run(main)` i `main.main(page)` w testach uruchamiają `app_logic.main`, więc OTA/splash/rollback w `load_and_run()` nie są w ogóle testowane.
-- OTA ma dwie implementacje: `main.py` (`check_and_download_ota`) i `trigger_manual_ota` w `app_logic.py`. Ręczna nie zapisuje `ota_prev_version.txt`, więc po rollbacku wersja jest nieznana; dodatkowo pisze `version.txt` do folderu danych.
-- `load_and_run()` ładuje **każdy** istniejący `app_logic_ota.py` (priorytet 3) bez porównania wersji z wbudowaną — stary cache przesłania świeży kod.
+- **Nie wracaj do `from app_logic import *` w `main.py`.** Nadpisywało `main` i `ft.run(main)` uruchamiał `app_logic.main`, więc OTA nie działała wcale (numer wersji się zmieniał, kod nie). Teraz jest re-eksport pomijający `main`; pilnuje tego `test_entrypoint_is_not_shadowed`.
+- `activate_downloaded_ota()` woła `module.main(page)` w tym samym procesie. Stare wątki (timer, sync) mogą jeszcze chwilę żyć — dlatego przed podmianą UI wołane jest `flush_pending_sync(timeout=2.0)`, a `page.overlay`/`page.controls` są czyszczone.
 - Edycja zadania z widoku Daily (`open_edit_task_dialog(tid, tit)` bez `current_category`) ustawia dropdown na „Ogólne” i nadpisuje kategorię przy zapisie.
 - `init_db()` nie może ruszać `db_last_change` (jest test) — inaczej pull z chmury nigdy nic nie pobierze.
+- W APK, które użytkownicy mają **przed** wersją 1.6.19, działa stary, zepsuty loader. Pierwsza naprawa wymaga jednorazowej instalacji nowego APK; dopiero potem OTA działa automatycznie.
