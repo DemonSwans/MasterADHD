@@ -4,9 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="mozew">
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Remove obsolete server_sync.py and add AGENTS.md project documentation">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/server_sync.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/AGENTS.md" beforeDir="false" afterPath="$PROJECT_DIR$/AGENTS.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -51,61 +51,61 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.8783402242441443" />
-      <entry key="MS500" value="5.423845343878046" />
-      <entry key="S2" value="14.699265204496879" />
-      <entry key="S5" value="25.502746232787143" />
-      <entry key="S10" value="32.54772079177963" />
-      <entry key="S30" value="39.03387153243659" />
-      <entry key="S60" value="40.948636050729135" />
-      <entry key="M2" value="41.963974924597416" />
-      <entry key="M5" value="45.317704312836554" />
-      <entry key="M10" value="72.7507053269871" />
-      <entry key="M15" value="130.87991710262153" />
-      <entry key="M30" value="380.8283180693746" />
-      <entry key="H1" value="807.7869492188222" />
-      <entry key="H2" value="1322.3836959870941" />
-      <entry key="H4" value="1879.214000025706" />
-      <entry key="D1" value="4508.583183423598" />
-      <entry key="W1" value="6713.371520720078" />
+      <entry key="MS100" value="1.8053965540928085" />
+      <entry key="MS500" value="4.874064229160452" />
+      <entry key="S2" value="10.310997503550269" />
+      <entry key="S5" value="14.602818369668944" />
+      <entry key="S10" value="16.934800326081678" />
+      <entry key="S30" value="19.00544644055266" />
+      <entry key="S60" value="20.038130519571965" />
+      <entry key="M2" value="21.53166191029479" />
+      <entry key="M5" value="39.45630980295856" />
+      <entry key="M10" value="87.66570296054232" />
+      <entry key="M15" value="140.09734869385" />
+      <entry key="M30" value="343.0460400419085" />
+      <entry key="H1" value="754.6525929794233" />
+      <entry key="H2" value="1311.451450005509" />
+      <entry key="H4" value="1929.566877305225" />
+      <entry key="D1" value="4654.186012087882" />
+      <entry key="W1" value="6908.9169405983" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
       <entry key="MS500" value="0.0" />
-      <entry key="S2" value="0.0" />
-      <entry key="S5" value="0.0" />
-      <entry key="S10" value="0.0" />
-      <entry key="S30" value="3.675251040363055E-170" />
-      <entry key="S60" value="1.917094426564031E-85" />
-      <entry key="M2" value="4.378463687829258E-43" />
-      <entry key="M5" value="1.1390130525573987E-17" />
-      <entry key="M10" value="3.374926743734386E-9" />
-      <entry key="M15" value="2.2499674415420994E-6" />
-      <entry key="M30" value="0.001499989147141414" />
-      <entry key="H1" value="0.03872969335201944" />
-      <entry key="H2" value="0.19679861115368205" />
-      <entry key="H4" value="0.44361989490292275" />
-      <entry key="D1" value="0.8733101393057771" />
-      <entry key="W1" value="0.9808339737219377" />
+      <entry key="S2" value="3.407058270757676E-161" />
+      <entry key="S5" value="7.95568180502002E-65" />
+      <entry key="S10" value="1.3407146538496646E-32" />
+      <entry key="S30" value="4.830012486283568E-11" />
+      <entry key="S60" value="1.2674450016647366E-5" />
+      <entry key="M2" value="0.0068441996935652396" />
+      <entry key="M5" value="0.30897238293922386" />
+      <entry key="M10" value="1.109074488553957" />
+      <entry key="M15" value="1.6998980185796932" />
+      <entry key="M30" value="2.607648234686759" />
+      <entry key="H1" value="3.2567410427182946" />
+      <entry key="H2" value="3.7605331311314765" />
+      <entry key="H4" value="4.199788007808219" />
+      <entry key="D1" value="4.82579190898014" />
+      <entry key="W1" value="4.973804128632071" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.8031480304395724" />
-      <entry key="MS500" value="5.377601020498305" />
-      <entry key="S2" value="14.668406195046098" />
-      <entry key="S5" value="25.48135075089059" />
-      <entry key="S10" value="32.534054337235006" />
-      <entry key="S30" value="39.028401659044654" />
-      <entry key="S60" value="40.94576587496543" />
-      <entry key="M2" value="41.962501968240524" />
-      <entry key="M5" value="45.31680647804582" />
-      <entry key="M10" value="72.74930636002627" />
-      <entry key="M15" value="130.87821777090448" />
-      <entry key="M30" value="380.82799563416796" />
-      <entry key="H1" value="807.8241618319302" />
-      <entry key="H2" value="1322.579345182258" />
-      <entry key="H4" value="1879.6567036372771" />
-      <entry key="D1" value="4509.456097424351" />
-      <entry key="W1" value="6714.35227730075" />
+      <entry key="MS100" value="1.722897764239211" />
+      <entry key="MS500" value="4.836168652219812" />
+      <entry key="S2" value="10.293203660358522" />
+      <entry key="S5" value="14.593080219526039" />
+      <entry key="S10" value="16.929219596160074" />
+      <entry key="S30" value="19.00337491526372" />
+      <entry key="S60" value="20.037052912811895" />
+      <entry key="M2" value="21.53778076347045" />
+      <entry key="M5" value="39.762394974972906" />
+      <entry key="M10" value="88.76982670092642" />
+      <entry key="M15" value="141.79200377046013" />
+      <entry key="M30" value="345.6491196363139" />
+      <entry key="H1" value="757.9060090883921" />
+      <entry key="H2" value="1315.2097681457576" />
+      <entry key="H4" value="1933.765168010958" />
+      <entry key="D1" value="4659.011299453514" />
+      <entry key="W1" value="6913.890651101884" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -137,7 +137,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
-    "settings.editor.selected.configurable": "ml.llm.LLMThirdPartyAiProvidersConfigurable"
+    "settings.editor.selected.configurable": "ml.llm.mcp"
   }
 }]]></component>
   <component name="SharedIndexes">
@@ -171,7 +171,7 @@
       <workItem from="1792843778501" duration="120000" />
       <workItem from="1792843910008" duration="304000" />
       <workItem from="1792844283788" duration="535000" />
-      <workItem from="1792845443337" duration="1492000" />
+      <workItem from="1792845443337" duration="3891000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -549,7 +549,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792796080433</updated>
     </task>
-    <option name="localTasksCounter" value="48" />
+    <task id="LOCAL-00048" summary="Remove obsolete server_sync.py and add AGENTS.md project documentation">
+      <option name="closed" value="true" />
+      <created>1792847835144</created>
+      <option name="number" value="00048" />
+      <option name="presentableId" value="LOCAL-00048" />
+      <option name="project" value="LOCAL" />
+      <updated>1792847835144</updated>
+    </task>
+    <option name="localTasksCounter" value="49" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -567,7 +575,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Refine versioning logic with `FALLBACK_VERSION`, streamline update checker for the `master` branch, and enhance CI/CD workflow for 64-bit APK builds." />
     <MESSAGE value="Update APK build step to include storage permissions" />
     <MESSAGE value="Add GitHub Gist cloud sync functionality, introduce app-specific local data folder, update version to 1.4.0, and refine APK build process." />
     <MESSAGE value="Update version to 1.5.0" />
@@ -592,7 +599,8 @@
     <MESSAGE value="pls" />
     <MESSAGE value="maybe" />
     <MESSAGE value="mozew" />
-    <option name="LAST_COMMIT_MESSAGE" value="mozew" />
+    <MESSAGE value="Remove obsolete server_sync.py and add AGENTS.md project documentation" />
+    <option name="LAST_COMMIT_MESSAGE" value="Remove obsolete server_sync.py and add AGENTS.md project documentation" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

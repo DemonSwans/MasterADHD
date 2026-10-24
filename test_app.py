@@ -164,6 +164,69 @@ def test_subtask_edit_and_delete():
     assert task_after_delete[5][0]["title"] == "Krok B"
 
 
+def test_subtask_reorder():
+    main.add_task_db("Projekt z kolejnością", is_daily=0, priority="B")
+    task_id = main.get_tasks(is_daily_view=False)[0][0]
+    steps = [{"title": "Krok 1", "is_done": 0}, {"title": "Krok 2", "is_done": 0},
+             {"title": "Krok 3", "is_done": 0}]
+    main.update_subtasks_db(task_id, steps)
+
+    # W górę: Krok 1 -> pozycja 2
+    assert main.move_subtask_db(task_id, 0, 1) == 1
+    titles = [s["title"] for s in main.get_tasks(is_daily_view=False)[0][5]]
+    assert titles == ["Krok 2", "Krok 1", "Krok 3"]
+
+    # W dół: Krok 3 -> pozycja 2
+    assert main.move_subtask_db(task_id, 2, -1) == 1
+    titles = [s["title"] for s in main.get_tasks(is_daily_view=False)[0][5]]
+    assert titles == ["Krok 2", "Krok 3", "Krok 1"]
+
+    # Ruchy poza zakresem nic nie zmieniają
+    assert main.move_subtask_db(task_id, 0, -1) is None
+    assert main.move_subtask_db(task_id, 2, 1) is None
+    titles = [s["title"] for s in main.get_tasks(is_daily_view=False)[0][5]]
+    assert titles == ["Krok 2", "Krok 3", "Krok 1"]
+
+
+def test_subtask_reorder_arrows_ui():
+    main.add_task_db("Projekt z krokami", is_daily=0, priority="B")
+    task_id = main.get_tasks(is_daily_view=False)[0][0]
+    main.update_subtasks_db(task_id, [{"title": "Alfa", "is_done": 0},
+                                     {"title": "Beta", "is_done": 0},
+                                     {"title": "Gamma", "is_done": 0}])
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    # Przejście na Master listę
+    sidebar_col.controls[2].content.on_click(None)
+
+    def get_subtask_rows():
+        content_col = root.content.controls[2].content
+        tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+        card = tasks_col.controls[0]
+        return card.content.controls[1:]
+
+    rows = get_subtask_rows()
+    assert len(rows) == 3
+    # Rząd kroku: checkbox, tytuł, strzałka w górę, strzałka w dół, edycja, usuń
+    assert rows[0].content.controls[2].disabled is True
+    assert rows[0].content.controls[3].disabled is False
+    assert rows[2].content.controls[3].disabled is True
+
+    # Przesuń "Alfa" w dół strzałką
+    rows[0].content.controls[3].on_click(None)
+    titles = [s["title"] for s in main.get_tasks(is_daily_view=False)[0][5]]
+    assert titles == ["Beta", "Alfa", "Gamma"]
+
+    # Przesuń "Gamma" w górę strzałką
+    get_subtask_rows()[2].content.controls[2].on_click(None)
+    titles = [s["title"] for s in main.get_tasks(is_daily_view=False)[0][5]]
+    assert titles == ["Beta", "Gamma", "Alfa"]
+
+
 # --- 4. TEST MATEMATYKI PASKA POSTĘPU ---
 def test_progress_calculation():
     assert main.calculate_progress_logic([], []) == 0.0

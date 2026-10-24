@@ -19,7 +19,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.19"
+FALLBACK_VERSION = "1.6.20"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -1298,6 +1298,27 @@ def edit_subtask_title_db(task_id, subtask_idx, new_title):
     push_database_async()
 
 
+def move_subtask_db(task_id, subtask_idx, delta):
+    """Przesuwa podkrok o `delta` pozycji (-1 w górę, +1 w dół).
+
+    Zwraca nowy indeks po przesunięciu albo None, gdy ruch jest niemożliwy
+    (indeks poza listą, próba wyjścia poza zakres).
+    """
+    with db_connection(write=True) as conn:
+        row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row or not row[0]:
+            return None
+        subtasks = json.loads(row[0])
+        target_idx = subtask_idx + delta
+        if not (0 <= subtask_idx < len(subtasks)) or not (0 <= target_idx < len(subtasks)):
+            return None
+        subtasks[subtask_idx], subtasks[target_idx] = subtasks[target_idx], subtasks[subtask_idx]
+        conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
+                     (json.dumps(subtasks, ensure_ascii=False), task_id))
+    push_database_async()
+    return target_idx
+
+
 def get_completed_archive(limit=100):
     with db_connection() as conn:
         return conn.execute(
@@ -2016,6 +2037,21 @@ def main(page: ft.Page):
             status_text.value = "✓ Usunięto krok"
             warning_text.value = ""
             refresh_view()
+
+    def move_subtask_action(task_id, subtask_idx, delta):
+        """Przesuwa krok w górę/dół i pilnuje, żeby Daily wskazywał ten sam krok."""
+        new_idx = move_subtask_db(task_id, subtask_idx, delta)
+        if new_idx is None:
+            return
+        if task_id in active_subtask_idx_map:
+            active = active_subtask_idx_map[task_id]
+            if active == subtask_idx:
+                active_subtask_idx_map[task_id] = new_idx
+            elif active == new_idx:
+                active_subtask_idx_map[task_id] = subtask_idx
+        status_text.value = "✓ Zmieniono kolejność kroków"
+        warning_text.value = ""
+        refresh_view()
 
     clear_archive_dialog = ft.AlertDialog(
         title=ft.Text("🗑️ Wyczyścić Dziennik Sukcesów?"),
@@ -3202,6 +3238,26 @@ def main(page: ft.Page):
                                         on_click=lambda e, tid=task_id, subs=subtasks, i=idx, sd=st_done: handle_task_check(
                                             tid, not sd, i, subs
                                         )
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.ARROW_UPWARD,
+                                        icon_size=14,
+                                        icon_color=COLOR_TEXT_SECONDARY if idx > 0 else COLOR_BG_BORDER,
+                                        tooltip="Przesuń krok wyżej",
+                                        width=26,
+                                        height=26,
+                                        disabled=idx == 0,
+                                        on_click=lambda e, tid=task_id, i=idx: move_subtask_action(tid, i, -1)
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.ARROW_DOWNWARD,
+                                        icon_size=14,
+                                        icon_color=COLOR_TEXT_SECONDARY if idx < len(subtasks) - 1 else COLOR_BG_BORDER,
+                                        tooltip="Przesuń krok niżej",
+                                        width=26,
+                                        height=26,
+                                        disabled=idx >= len(subtasks) - 1,
+                                        on_click=lambda e, tid=task_id, i=idx: move_subtask_action(tid, i, 1)
                                     ),
                                     ft.IconButton(
                                         icon=ft.Icons.EDIT_OUTLINED,
