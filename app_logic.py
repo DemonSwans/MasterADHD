@@ -15,11 +15,11 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.22"
+FALLBACK_VERSION = "1.6.23"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -1001,6 +1001,7 @@ def ensure_schema(conn):
     """Domyka schemat (migracje) na istniejącym połączeniu. Idempotentne."""
     _ensure_column(conn, "tasks", "subtasks", "TEXT DEFAULT '[]'")
     _ensure_column(conn, "tasks", "category", "TEXT DEFAULT 'Ogólne'")
+    _ensure_column(conn, "tasks", "deadline", "TEXT")
     _ensure_column(conn, "routines", "routine_days", "TEXT DEFAULT '[]'")
 
 
@@ -1058,7 +1059,13 @@ def init_db():
                          subtasks
                          TEXT
                          DEFAULT
-                         '[]'
+                         '[]',
+                         category
+                         TEXT
+                         DEFAULT
+                         'Ogólne',
+                         deadline
+                         TEXT
                      )
                      """)
         conn.execute(
@@ -1083,7 +1090,8 @@ def export_database_to_json_dict():
     """Eksportuje całą zawartość bazy (zadania, rutyny, archiwum) do słownika JSON."""
     with db_connection() as conn:
         ensure_schema(conn)
-        tasks_rows = conn.execute("SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks").fetchall()
+        tasks_rows = conn.execute(
+            "SELECT id, title, is_daily, is_done, priority, subtasks, category, deadline FROM tasks").fetchall()
         tasks = []
         for r in tasks_rows:
             try:
@@ -1097,7 +1105,8 @@ def export_database_to_json_dict():
                 "is_done": r[3],
                 "priority": r[4],
                 "subtasks": subs,
-                "category": r[6] if len(r) > 6 and r[6] else "Ogólne"
+                "category": r[6] if len(r) > 6 and r[6] else "Ogólne",
+                "deadline": (r[7] or "") if len(r) > 7 else ""
             })
         routines_rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines").fetchall()
         routines = [{"id": r[0], "title": r[1], "is_done": r[2], "days": _normalize_routine_days(r[3])} for r in routines_rows]
@@ -1149,10 +1158,11 @@ def import_database_from_json_dict(data, replace_existing=False):
 
         for t in data.get("tasks", []):
             conn.execute(
-                "INSERT INTO tasks (title, is_daily, is_done, priority, subtasks, category) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks (title, is_daily, is_done, priority, subtasks, category, deadline) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (t.get("title", ""), int(t.get("is_daily", 0)), int(t.get("is_done", 0)),
                  t.get("priority", "B"), json.dumps(t.get("subtasks", []), ensure_ascii=False),
-                 t.get("category", "Ogólne"))
+                 t.get("category", "Ogólne"), normalize_deadline(t.get("deadline")))
             )
         for r in data.get("routines", []):
             conn.execute(
@@ -1224,22 +1234,232 @@ def play_sound_feedback(sound_type="task_done"):
     threading.Thread(target=_play, daemon=True).start()
 
 
+def _select_tasks(conn, is_daily_view):
+    columns = "id, title, is_daily, is_done, priority, subtasks, category, deadline"
+    if is_daily_view:
+        rows = conn.execute(
+            f"SELECT {columns} FROM tasks WHERE is_daily = 1 ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {columns} FROM tasks ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
+    result = []
+    for r in rows:
+        try:
+            subs = json.loads(r[5] if r[5] else "[]")
+        except Exception:
+            subs = []
+        # deadline jest ostatnim elementem, żeby dotychczasowe indeksy 0..6
+        # (używane przez UI i testy) pozostały bez zmian.
+        result.append((r[0], r[1], r[2], r[3], r[4], subs,
+                       r[6] if len(r) > 6 and r[6] else "Ogólne",
+                       (r[7] or None) if len(r) > 7 else None))
+    return result
+
+
 def get_tasks(is_daily_view=True):
-    with db_connection() as conn:
-        if is_daily_view:
-            rows = conn.execute(
-                "SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks WHERE is_daily = 1 ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
+    try:
+        with db_connection() as conn:
+            return _select_tasks(conn, is_daily_view)
+    except sqlite3.OperationalError as e:
+        # Baza pobrana z chmury/snapshotu może nie mieć jeszcze kolumny deadline.
+        LOG.warning("get_tasks: %s — domykam schemat bazy", e)
+        ensure_schema_upgrade()
+        with db_connection() as conn:
+            return _select_tasks(conn, is_daily_view)
+
+
+# --- TERMINY ZADAŃ (deadline) ---
+# Wartość-sentinel: pozwala odróżnić „nie zmieniaj terminu” od „wyczyść termin”.
+DEADLINE_UNSET = object()
+
+
+def parse_deadline_input(value, today=None):
+    """Zamienia datę na ISO `YYYY-MM-DD`.
+
+    Przyjmuje `date`/`datetime`, ISO, `DD.MM.RRRR`, `DD.MM.RR`, `DD.MM`
+    (bez roku = najbliższe wystąpienie) oraz warianty z `/` i `-`.
+    Puste `None`/`""` zwraca jako `None`. Niepoprawną datę zgłasza jako ValueError.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # 1) ISO (np. 2026-11-24) — najbezpieczniejszy format.
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        pass
+
+    # 2) DD.MM(.RRRR|.RR) oraz warianty z / i -.
+    normalized = text.replace("/", ".").replace("-", ".")
+    parts = [p for p in normalized.split(".") if p.strip()]
+    if len(parts) not in (2, 3):
+        raise ValueError(f"Niepoprawny termin: {text}")
+    try:
+        day, month = int(parts[0]), int(parts[1])
+        if len(parts) == 3:
+            year = int(parts[2])
+            if year < 100:
+                year += 2000
         else:
-            rows = conn.execute(
-                "SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks ORDER BY is_done ASC, priority ASC, id DESC").fetchall()
-        result = []
-        for r in rows:
-            try:
-                subs = json.loads(r[5] if r[5] else "[]")
-            except Exception:
-                subs = []
-            result.append((r[0], r[1], r[2], r[3], r[4], subs, r[6] if len(r) > 6 and r[6] else "Ogólne"))
-        return result
+            base = today or date.today()
+            year = base.year
+        parsed = date(year, month, day)
+        if len(parts) == 2 and parsed < (today or date.today()):
+            # „24.11” wpisane w grudniu oznacza kolejny rok.
+            parsed = date(year + 1, month, day)
+        return parsed.isoformat()
+    except (TypeError, ValueError):
+        raise ValueError(f"Niepoprawny termin: {text}")
+
+
+def normalize_deadline(value):
+    """Łagodna wersja parsera — dla importu JSON i starych danych."""
+    try:
+        return parse_deadline_input(value)
+    except ValueError:
+        return None
+
+
+def format_deadline_pl(deadline, short=False):
+    """Formatuje termin do „24.11.2026” albo krótkiego „24.11”."""
+    if not deadline:
+        return ""
+    try:
+        d = date.fromisoformat(str(deadline))
+    except ValueError:
+        return ""
+    return f"{d.day:02d}.{d.month:02d}" if short else f"{d.day:02d}.{d.month:02d}.{d.year}"
+
+
+def days_to_deadline(deadline, today=None):
+    """Liczba dni do terminu (ujemna = po terminie); None gdy brak/niepoprawny."""
+    if not deadline:
+        return None
+    try:
+        d = date.fromisoformat(str(deadline))
+    except ValueError:
+        return None
+    return (d - (today or date.today())).days
+
+
+def deadline_urgency(deadline, today=None):
+    """none / overdue / today / soon (≤3 dni) / later — do kolorów i tekstów."""
+    days = days_to_deadline(deadline, today)
+    if days is None:
+        return "none"
+    if days < 0:
+        return "overdue"
+    if days == 0:
+        return "today"
+    if days <= 3:
+        return "soon"
+    return "later"
+
+
+def deadline_chip_text(deadline, today=None):
+    """Krótki, spokojny opis terminu na karcie zadania.
+
+    Dalekie terminy pokazują samą datę (bez „za 26 dni”), żeby nie budować
+    napięcia; względne „jutro / za N dni” dopiero blisko terminu.
+    """
+    days = days_to_deadline(deadline, today)
+    short = format_deadline_pl(deadline, short=True)
+    if days is None:
+        return ""
+    if days < 0:
+        return f"po terminie · {short}"
+    if days == 0:
+        return "termin dziś"
+    if days == 1:
+        return f"termin jutro · {short}"
+    if days <= 3:
+        return f"termin za {days} dni · {short}"
+    return f"termin {short}"
+
+
+def sort_tasks_by_deadline(tasks):
+    """Zaległe → najbliższe → bez terminu; wykonane zawsze na końcu.
+
+    Sort jest stabilny, więc w obrębie tych samych terminów zachowuje
+    dotychczasową kolejność (priorytet + id z get_tasks).
+    """
+    def key(task):
+        done = 1 if task[3] else 0
+        deadline = task[7] if len(task) > 7 else None
+        if not deadline:
+            return (done, 1, "9999-12-31")
+        return (done, 0, deadline)
+    return sorted(tasks, key=key)
+
+
+def get_deadline_tasks(within_days=7, include_overdue=True, limit=None, today=None):
+    """Aktywne zadania z terminu w oknie `within_days` (z całej Master listy)."""
+    base = today or date.today()
+    result = []
+    for task in get_tasks(is_daily_view=False):
+        if task[3]:  # wykonane nie przypominają
+            continue
+        deadline = task[7] if len(task) > 7 else None
+        days = days_to_deadline(deadline, base)
+        if days is None:
+            continue
+        if days > within_days:
+            continue
+        if days < 0 and not include_overdue:
+            continue
+        result.append(task)
+    result = sort_tasks_by_deadline(result)
+    return result[:limit] if limit else result
+
+
+def filter_tasks_by_deadline(tasks, mode="ALL", today=None):
+    """Filtr Master listy: ALL / WEEK (najbliższe 7 dni) / OVERDUE."""
+    if mode not in ("WEEK", "OVERDUE"):
+        return list(tasks)
+    base = today or date.today()
+    result = []
+    for task in tasks:
+        deadline = task[7] if len(task) > 7 else None
+        days = days_to_deadline(deadline, base)
+        if days is None:
+            continue
+        if mode == "WEEK" and 0 <= days <= 7:
+            result.append(task)
+        elif mode == "OVERDUE" and days < 0:
+            result.append(task)
+    return result
+
+
+def deadline_card_hidden_today(today=None):
+    return get_config("deadline_card_hidden_date", "") == (today or date.today()).isoformat()
+
+
+def hide_deadline_card_today(today=None):
+    set_config("deadline_card_hidden_date", (today or date.today()).isoformat())
+
+
+def deadline_reminder_days():
+    try:
+        return max(1, int(get_config("deadline_reminder_days", "7") or 7))
+    except (TypeError, ValueError):
+        return 7
+
+
+def should_show_deadline_card(today=None, within_days=None):
+    """Czy pokazać spokojną kartę „Nadchodzące terminy” na Daily."""
+    if get_config("deadline_reminders_enabled", "1") != "1":
+        return False
+    if deadline_card_hidden_today(today):
+        return False
+    days = deadline_reminder_days() if within_days is None else within_days
+    return bool(get_deadline_tasks(within_days=days, include_overdue=True, limit=1, today=today))
 
 
 def _select_routines(conn):
@@ -1326,11 +1546,55 @@ def count_daily_priority_a():
         return res[0] if res else 0
 
 
-def add_task_db(title, is_daily, priority="B", category="Ogólne"):
+def add_task_db(title, is_daily, priority="B", category="Ogólne", deadline=None):
+    """Dodaje zadanie. `deadline` to opcjonalna data ISO (YYYY-MM-DD)."""
     with db_connection(write=True) as conn:
+        ensure_schema(conn)
         conn.execute(
-            "INSERT INTO tasks (title, is_daily, priority, subtasks, category) VALUES (?, ?, ?, '[]', ?)",
-            (title.strip(), int(is_daily), priority, category))
+            "INSERT INTO tasks (title, is_daily, priority, subtasks, category, deadline) "
+            "VALUES (?, ?, ?, '[]', ?, ?)",
+            (title.strip(), int(is_daily), priority, category, normalize_deadline(deadline)))
+    push_database_async()
+
+
+def get_task_deadline(task_id):
+    """Zwraca termin zadania jako ISO (albo None) — do wypełnienia dialogu edycji."""
+    try:
+        with db_connection() as conn:
+            row = conn.execute("SELECT deadline FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            return (row[0] or None) if row else None
+    except sqlite3.OperationalError:
+        ensure_schema_upgrade()
+        with db_connection() as conn:
+            row = conn.execute("SELECT deadline FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            return (row[0] or None) if row else None
+
+
+def set_task_deadline_db(task_id, deadline):
+    """Ustawia lub czyści termin zadania (`None`/`""` = usuń termin)."""
+    value = normalize_deadline(deadline)
+    with db_connection(write=True) as conn:
+        ensure_schema(conn)
+        conn.execute("UPDATE tasks SET deadline = ? WHERE id = ?", (value, task_id))
+    push_database_async()
+
+
+def update_task_details_db(task_id, title, category=None, deadline=DEADLINE_UNSET):
+    """Zapisuje tytuł, kategorię i termin jednym UPDATE-em (jedno pushowanie).
+
+    `deadline=DEADLINE_UNSET` zostawia termin bez zmian; `None` go czyści.
+    """
+    title = (title or "").strip()
+    new_deadline = None if deadline is DEADLINE_UNSET else normalize_deadline(deadline)
+    with db_connection(write=True) as conn:
+        ensure_schema(conn)
+        if category:
+            conn.execute("UPDATE tasks SET title = ?, category = ? WHERE id = ?",
+                         (title, category, task_id))
+        else:
+            conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (title, task_id))
+        if deadline is not DEADLINE_UNSET:
+            conn.execute("UPDATE tasks SET deadline = ? WHERE id = ?", (new_deadline, task_id))
     push_database_async()
 
 
@@ -1779,10 +2043,24 @@ def main(page: ft.Page):
     master_filter_priority = "ALL"
     master_filter_status = "ALL"
     master_filter_category = "ALL"
+    master_sort_mode = get_config("master_sort_mode", "DEFAULT") or "DEFAULT"
+    master_deadline_filter = get_config("master_deadline_filter", "ALL") or "ALL"
 
     def set_search_query(q):
         nonlocal master_search_query
         master_search_query = q
+        refresh_view()
+
+    def set_sort_mode(mode):
+        nonlocal master_sort_mode
+        master_sort_mode = mode
+        set_config("master_sort_mode", mode)
+        refresh_view()
+
+    def set_deadline_filter(mode):
+        nonlocal master_deadline_filter
+        master_deadline_filter = mode
+        set_config("master_deadline_filter", mode)
         refresh_view()
 
     def set_filter_category(cat):
@@ -2050,6 +2328,77 @@ def main(page: ft.Page):
         dense=True,
     )
 
+    def make_deadline_editor(state):
+        """Sekcja „Termin (opcjonalnie)” ze skrótami i kalendarzem.
+
+        `state` to słownik z kluczem „value” (ISO albo None). Zwraca parę
+        (kontrolka, odśwież etykietę).
+        """
+        label = ft.Text("", size=12, color=COLOR_TEXT_SECONDARY)
+
+        def refresh_label():
+            value = state.get("value")
+            if not value:
+                label.value = "Bez terminu — zadanie nie będzie przypominać."
+                label.color = COLOR_TEXT_SECONDARY
+            else:
+                days = days_to_deadline(value)
+                label.value = f"Termin: {format_deadline_pl(value)} ({deadline_chip_text(value)})"
+                label.color = COLOR_PRIO_A if days is not None and days < 0 else (
+                    COLOR_PRIO_B if days is not None and days <= 3 else COLOR_TEXT_SECONDARY)
+
+        def set_value(value):
+            state["value"] = value
+            refresh_label()
+
+        def preset(days_ahead):
+            set_value((date.today() + timedelta(days=days_ahead)).isoformat())
+
+        def open_picker(e=None):
+            picker = state.get("picker")
+            if picker is None:
+                try:
+                    start = date.fromisoformat(state["value"]) if state.get("value") else date.today()
+                except ValueError:
+                    start = date.today()
+                picker = ft.DatePicker(
+                    value=start,
+                    first_date=date.today() - timedelta(days=3650),
+                    last_date=date.today() + timedelta(days=3650),
+                    help_text="Wybierz termin zadania",
+                    cancel_text="Anuluj",
+                    confirm_text="Wybierz",
+                    on_change=lambda ev: set_value(picker.value),
+                )
+                state["picker"] = picker
+                page.overlay.append(picker)
+            try:
+                picker.value = date.fromisoformat(state["value"]) if state.get("value") else date.today()
+            except ValueError:
+                picker.value = date.today()
+            if hasattr(page, "show_dialog"):
+                page.show_dialog(picker)
+            else:
+                picker.open = True
+                page.update()
+
+        refresh_label()
+        column = ft.Column([
+            ft.Text("Termin (opcjonalnie)", size=13, color=COLOR_TEXT_PRIMARY),
+            ft.Row([
+                ft.TextButton("Dziś", on_click=lambda e: preset(0)),
+                ft.TextButton("Jutro", on_click=lambda e: preset(1)),
+                ft.TextButton("Za tydzień", on_click=lambda e: preset(7)),
+                ft.TextButton("📅 Wybierz datę", on_click=open_picker),
+                ft.TextButton("Usuń termin", on_click=lambda e: set_value(None)),
+            ], wrap=True, spacing=4),
+            label,
+        ], tight=True, spacing=4)
+        return column, refresh_label
+
+    new_deadline_state = {"value": None}
+    new_deadline_editor, refresh_new_deadline = make_deadline_editor(new_deadline_state)
+
     def save_master_task(e=None):
         if master_title_field.value.strip():
             custom_category = (new_category_field.value or "").strip()
@@ -2057,16 +2406,20 @@ def main(page: ft.Page):
                 master_title_field.value.strip(),
                 is_daily=False,
                 priority=selected_new_prio,
-                category=custom_category or master_category_dropdown.value or "Ogólne"
+                category=custom_category or master_category_dropdown.value or "Ogólne",
+                deadline=new_deadline_state.get("value")
             )
             master_title_field.value = ""
             new_category_field.value = ""
+            new_deadline_state["value"] = None
+            refresh_new_deadline()
             master_dialog.open = False
             status_text.value = "✓ Dodano"
             refresh_view()
 
     master_dialog = ft.AlertDialog(title=ft.Text("➕ Nowy projekt / zadanie"), content=ft.Column(
         [master_title_field, master_category_dropdown, new_category_field,
+         new_deadline_editor,
          ft.Text("Priorytet:", size=13), prio_select_row], tight=True, spacing=10),
                                    actions=[ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
                                             ft.Button("Dodaj", on_click=save_master_task)])
@@ -2110,6 +2463,8 @@ def main(page: ft.Page):
         border_color=COLOR_BG_BORDER
     )
     editing_task_id = None
+    edit_deadline_state = {"value": None}
+    edit_deadline_editor, refresh_edit_deadline = make_deadline_editor(edit_deadline_state)
 
     def open_edit_task_dialog(task_id, current_title, current_category="Ogólne"):
         nonlocal editing_task_id
@@ -2121,6 +2476,8 @@ def main(page: ft.Page):
         if cat not in existing:
             edit_category_dropdown.options.append(ft.dropdown.Option(cat))
         edit_category_dropdown.value = cat
+        edit_deadline_state["value"] = get_task_deadline(task_id)
+        refresh_edit_deadline()
         edit_task_dialog.open = True
         page.update()
 
@@ -2129,7 +2486,8 @@ def main(page: ft.Page):
         val = edit_task_field.value.strip()
         cat = edit_category_dropdown.value or "Ogólne"
         if editing_task_id and val:
-            edit_task_title_db(editing_task_id, val, new_category=cat)
+            update_task_details_db(editing_task_id, val, category=cat,
+                                   deadline=edit_deadline_state.get("value"))
             edit_task_dialog.open = False
             status_text.value = "✓ Zaktualizowano zadanie"
             warning_text.value = ""
@@ -2137,7 +2495,8 @@ def main(page: ft.Page):
 
     edit_task_dialog = ft.AlertDialog(
         title=ft.Text("✏️ Edytuj zadanie"),
-        content=ft.Column([edit_task_field, edit_category_dropdown], tight=True, spacing=10),
+        content=ft.Column([edit_task_field, edit_category_dropdown, edit_deadline_editor],
+                          tight=True, spacing=10),
         actions=[
             ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
             ft.Button("Zapisz", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=save_task_edit)
@@ -2847,6 +3206,67 @@ def main(page: ft.Page):
                 ], spacing=8)
             )
 
+            # --- KARTA: Terminy i przypomnienia ---
+            def toggle_deadline_reminders(e):
+                set_config("deadline_reminders_enabled", "1" if e.control.value else "0")
+                refresh_view()
+
+            def set_deadline_lead_days(days):
+                set_config("deadline_reminder_days", str(days))
+                # Nowe ustawienie ma zadziałać od razu, bez czekania do jutra.
+                set_config("deadline_card_hidden_date", "")
+                refresh_view()
+
+            def toggle_deadline_repeat(e):
+                set_config("deadline_reminder_repeat_day_before", "1" if e.control.value else "0")
+                refresh_view()
+
+            lead_days = deadline_reminder_days()
+            lead_pills = []
+            for d_val in (14, 7, 3):
+                is_active = (lead_days == d_val)
+                lead_pills.append(
+                    ft.Container(
+                        content=ft.Text(f"{d_val} dni", size=11, weight=ft.FontWeight.BOLD,
+                                        color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+                        bgcolor="#f59e0b33" if is_active else "#21262d",
+                        border=ft.Border.all(1, COLOR_PRIO_B if is_active else COLOR_BG_BORDER),
+                        border_radius=8,
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=5),
+                        on_click=lambda e, dv=d_val: set_deadline_lead_days(dv)
+                    )
+                )
+
+            card_deadlines = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.HOURGLASS_BOTTOM_ROUNDED, size=18, color=COLOR_PRIO_B),
+                        ft.Text("Terminy i przypomnienia", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
+                    ], spacing=8),
+                    ft.Switch(
+                        label="Spokojna karta „Nadchodzące terminy” na Daily",
+                        value=get_config("deadline_reminders_enabled", "1") == "1",
+                        active_color=COLOR_SUCCESS,
+                        on_change=toggle_deadline_reminders
+                    ),
+                    ft.Text("Ile dni wcześniej pokazywać terminy:", size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Row(lead_pills, spacing=6),
+                    ft.Switch(
+                        label="Przypomnij też dzień przed terminem",
+                        value=get_config("deadline_reminder_repeat_day_before", "1") == "1",
+                        active_color=COLOR_PRIO_B,
+                        on_change=toggle_deadline_repeat
+                    ),
+                    ft.Text(
+                        "To przypomnienie w aplikacji: jedna cicha karta nad zadaniami, raz na dobę, "
+                        "z opcją „Ukryj na dziś”. Bez wyskakujących okien i bez zmiany priorytetów. "
+                        "Powiadomienia systemowe na telefon pojawią się w kolejnym etapie.",
+                        size=11, color=COLOR_TEXT_SECONDARY
+                    )
+                ], spacing=8)
+            )
+
             def handle_export_json(e):
                 ok, path = export_database_to_json_file()
                 if ok:
@@ -2912,6 +3332,7 @@ def main(page: ft.Page):
                 ota_restart_hint,
                 card_ota,
                 card_sound,
+                card_deadlines,
                 card_daily_mode,
                 card_backup,
                 card_routines,
@@ -3097,13 +3518,42 @@ def main(page: ft.Page):
                     continue
 
                 filtered_tasks.append(t)
+            filtered_tasks = filter_tasks_by_deadline(filtered_tasks, master_deadline_filter)
+            if master_sort_mode == "DEADLINE":
+                filtered_tasks = sort_tasks_by_deadline(filtered_tasks)
             all_view_tasks = filtered_tasks
 
         for t in all_view_tasks:
             task_id, title, is_daily, is_done, priority, subtasks, *extra = t
             category = extra[0] if extra else "Ogólne"
+            task_deadline = extra[1] if len(extra) > 1 else None
             prio = priority if priority in ("A", "B", "C") else "B"
             card_border_color = COLOR_BG_BORDER if not is_done else "#21262d"
+
+            # Dyskretny chip terminu — tylko informacja, nigdy alarm całej karty.
+            deadline_chip = None
+            if task_deadline:
+                urgency = deadline_urgency(task_deadline)
+                if urgency == "overdue":
+                    chip_color, chip_border = COLOR_PRIO_A, "#ef444455"
+                elif urgency in ("today", "soon"):
+                    chip_color, chip_border = COLOR_PRIO_B, "#f59e0b55"
+                else:
+                    chip_color, chip_border = COLOR_TEXT_SECONDARY, COLOR_BG_BORDER
+                deadline_chip = ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.EVENT_OUTLINED, size=13, color=chip_color),
+                        ft.Text(deadline_chip_text(task_deadline), size=10, color=chip_color,
+                                weight=ft.FontWeight.W_500),
+                    ], spacing=4, tight=True),
+                    bgcolor="#ef444418" if urgency == "overdue" else "#f59e0b14" if urgency in ("today", "soon") else "#21262d66",
+                    border=ft.Border.all(1, chip_border),
+                    border_radius=6,
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                    tooltip=f"Termin: {format_deadline_pl(task_deadline)} (kliknij, aby zmienić)",
+                    on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(
+                        tid, tit, current_category=cat)
+                )
 
             prio_items = [ft.Container(
                 content=ft.Row([ft.Text(prio, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=13)],
@@ -3583,6 +4033,16 @@ def main(page: ft.Page):
                         )
                     )
 
+            if deadline_chip is not None:
+                # Chip dokładany na końcu istniejącego rzędu (lub jako osobny rząd
+                # w Column), więc indeksy przycisków edycji/usuwania się nie zmieniają.
+                if isinstance(task_content.content, ft.Row):
+                    task_content.content.controls.append(deadline_chip)
+                else:
+                    task_content.content.controls.append(
+                        ft.Row([deadline_chip], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                    )
+
             tasks_column.controls.append(task_content)
 
         elements = [
@@ -3658,6 +4118,38 @@ def main(page: ft.Page):
                     )
                 )
 
+            deadline_pills = []
+            for d_val, d_lbl in [("ALL", "Wszystkie"), ("WEEK", "Ten tydzień"), ("OVERDUE", "Zaległe")]:
+                is_active = (master_deadline_filter == d_val)
+                deadline_pills.append(
+                    ft.Container(
+                        content=ft.Text(d_lbl, size=11, weight=ft.FontWeight.BOLD,
+                                        color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+                        bgcolor="#ef444433" if is_active and d_val == "OVERDUE" else (
+                            "#f59e0b33" if is_active else "#21262d"),
+                        border=ft.Border.all(1, COLOR_PRIO_A if is_active and d_val == "OVERDUE" else (
+                            COLOR_PRIO_B if is_active else COLOR_BG_BORDER)),
+                        border_radius=8,
+                        padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                        on_click=lambda e, dv=d_val: set_deadline_filter(dv)
+                    )
+                )
+
+            sort_pills = []
+            for s_val, s_lbl in [("DEFAULT", "Domyślnie"), ("DEADLINE", "📅 Termin")]:
+                is_active = (master_sort_mode == s_val)
+                sort_pills.append(
+                    ft.Container(
+                        content=ft.Text(s_lbl, size=11, weight=ft.FontWeight.BOLD,
+                                        color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+                        bgcolor="#3b82f633" if is_active else "#21262d",
+                        border=ft.Border.all(1, COLOR_PRIO_C if is_active else COLOR_BG_BORDER),
+                        border_radius=8,
+                        padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                        on_click=lambda e, sv=s_val: set_sort_mode(sv)
+                    )
+                )
+
             filter_bar = ft.Container(
                 bgcolor=COLOR_BG_CARD,
                 border=ft.Border.all(1, COLOR_BG_BORDER),
@@ -3672,6 +4164,13 @@ def main(page: ft.Page):
                         ft.Container(width=8),
                         ft.Text("Status:", size=11, color=COLOR_TEXT_SECONDARY),
                         ft.Row(status_pills, spacing=4)
+                    ], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                    ft.Row([
+                        ft.Text("Termin:", size=11, color=COLOR_TEXT_SECONDARY),
+                        ft.Row(deadline_pills, spacing=4),
+                        ft.Container(width=8),
+                        ft.Text("Sortuj:", size=11, color=COLOR_TEXT_SECONDARY),
+                        ft.Row(sort_pills, spacing=4)
                     ], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
                 ], spacing=8)
             )
@@ -3769,6 +4268,64 @@ def main(page: ft.Page):
                             ft.Text("Nawyki i Rutyny:", size=12, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_SECONDARY),
                             routines_row
                         ], spacing=8)
+                    )
+                )
+
+        if is_daily_mode and should_show_deadline_card():
+            due_tasks = get_deadline_tasks(within_days=deadline_reminder_days(), include_overdue=True)
+            if due_tasks:
+                reminder_rows = []
+                for dt in due_tasks[:3]:
+                    d_id = dt[0]
+                    d_title = dt[1]
+                    d_deadline = dt[7] if len(dt) > 7 else None
+                    d_cat = dt[6] if len(dt) > 6 else "Ogólne"
+                    d_urgency = deadline_urgency(d_deadline)
+                    d_color = COLOR_PRIO_A if d_urgency == "overdue" else (
+                        COLOR_PRIO_B if d_urgency in ("today", "soon") else COLOR_TEXT_SECONDARY)
+                    reminder_rows.append(
+                        ft.Container(
+                            padding=ft.Padding.symmetric(horizontal=8, vertical=6),
+                            border_radius=8,
+                            bgcolor="#0d111744",
+                            on_click=lambda e, tid=d_id, tit=d_title, cat=d_cat: open_edit_task_dialog(
+                                tid, tit, current_category=cat),
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.EVENT_OUTLINED, size=14, color=d_color),
+                                ft.Text(d_title, size=12, color=COLOR_TEXT_PRIMARY, expand=True,
+                                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                                ft.Text(deadline_chip_text(d_deadline), size=10, color=d_color,
+                                        weight=ft.FontWeight.W_500),
+                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                        )
+                    )
+                extra_count = len(due_tasks) - len(reminder_rows)
+                card_children = [
+                    ft.Row([
+                        ft.Row([
+                            ft.Icon(ft.Icons.HOURGLASS_BOTTOM_ROUNDED, size=16, color=COLOR_PRIO_B),
+                            ft.Text("Nadchodzące terminy", size=13, weight=ft.FontWeight.BOLD,
+                                    color=COLOR_TEXT_PRIMARY),
+                        ], spacing=6),
+                        ft.Container(expand=True),
+                        ft.TextButton("Ukryj na dziś", on_click=lambda e: (
+                            hide_deadline_card_today(), refresh_view())),
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ] + reminder_rows
+                if extra_count > 0:
+                    card_children.append(
+                        ft.TextButton(
+                            f"+{extra_count} więcej w Master liście",
+                            on_click=lambda e: (set_sort_mode("DEADLINE"), switch_view("master"))
+                        )
+                    )
+                elements.append(
+                    ft.Container(
+                        bgcolor="#f59e0b0d",
+                        border=ft.Border.all(1, "#f59e0b33"),
+                        border_radius=12,
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                        content=ft.Column(card_children, spacing=2)
                     )
                 )
 

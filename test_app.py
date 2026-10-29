@@ -5,6 +5,7 @@ import os
 import sqlite3
 import sys
 import urllib.request
+from datetime import date, timedelta
 import pytest
 import flet as ft
 import main
@@ -1091,6 +1092,258 @@ def test_init_db_does_not_touch_cloud_timestamp():
     main.set_config("db_last_change", "2000-01-01T00:00:00")
     main.init_db()
     assert main.get_config("db_last_change") == "2000-01-01T00:00:00"
+
+
+def _control_contains_text(control, needle):
+    """Rekurencyjnie szuka tekstu w kontrolkach Flet (do asercji UI)."""
+    if isinstance(control, str):
+        return needle in control
+    text = getattr(control, "text", None) or getattr(control, "value", None)
+    if isinstance(text, str) and needle in text:
+        return True
+    content = getattr(control, "content", None)
+    if isinstance(content, str) and needle in content:
+        return True
+    if content is not None and _control_contains_text(content, needle):
+        return True
+    for child in getattr(control, "controls", None) or []:
+        if _control_contains_text(child, needle):
+            return True
+    return False
+
+
+# --- TERMINY ZADAŃ (deadline) ---
+def test_deadline_parsing_and_formatting():
+    assert main.parse_deadline_input("2026-11-24") == "2026-11-24"
+    assert main.parse_deadline_input("24.11.2026") == "2026-11-24"
+    assert main.parse_deadline_input("24/11/26") == "2026-11-24"
+    assert main.parse_deadline_input("24.11", today=date(2026, 9, 1)) == "2026-11-24"
+    # Data bez roku, która już minęła, oznacza kolejny rok.
+    assert main.parse_deadline_input("24.11", today=date(2026, 12, 1)) == "2027-11-24"
+    assert main.parse_deadline_input(None) is None
+    assert main.parse_deadline_input("") is None
+    with pytest.raises(ValueError):
+        main.parse_deadline_input("31.02.2026")
+    assert main.normalize_deadline("bzdura") is None
+    assert main.format_deadline_pl("2026-11-24") == "24.11.2026"
+    assert main.format_deadline_pl("2026-11-24", short=True) == "24.11"
+    assert main.format_deadline_pl(None) == ""
+
+
+def test_deadline_urgency_and_chip_text():
+    today = date(2026, 11, 20)
+    assert main.days_to_deadline("2026-11-24", today=today) == 4
+    assert main.deadline_urgency("2026-11-24", today=today) == "later"
+    assert main.deadline_urgency("2026-11-22", today=today) == "soon"
+    assert main.deadline_urgency("2026-11-20", today=today) == "today"
+    assert main.deadline_urgency("2026-11-19", today=today) == "overdue"
+    assert main.deadline_urgency(None, today=today) == "none"
+    # Daleki termin pokazuje samą datę, bez „za N dni”.
+    assert main.deadline_chip_text("2026-12-24", today=today) == "termin 24.12"
+    assert "za 2 dni" in main.deadline_chip_text("2026-11-22", today=today)
+    assert "po terminie" in main.deadline_chip_text("2026-11-19", today=today)
+
+
+def test_deadline_db_crud_and_details_update():
+    main.add_task_db("Z terminem", is_daily=0, deadline="2026-11-24")
+    task = main.get_tasks(is_daily_view=False)[0]
+    assert len(task) == 8
+    assert task[7] == "2026-11-24"
+    task_id = task[0]
+    assert main.get_task_deadline(task_id) == "2026-11-24"
+
+    main.set_task_deadline_db(task_id, "2026-12-01")
+    assert main.get_task_deadline(task_id) == "2026-12-01"
+
+    # Zapisz tytuł, kategorię i termin jednym wywołaniem.
+    main.update_task_details_db(task_id, "Nowy tytuł", category="Praca", deadline="2026-12-24")
+    updated = main.get_tasks(is_daily_view=False)[0]
+    assert updated[1] == "Nowy tytuł"
+    assert updated[6] == "Praca"
+    assert updated[7] == "2026-12-24"
+
+    # DEADLINE_UNSET zostawia termin bez zmian, None go czyści.
+    main.update_task_details_db(task_id, "Bez zmian terminu")
+    assert main.get_task_deadline(task_id) == "2026-12-24"
+    main.update_task_details_db(task_id, "Bez terminu", deadline=None)
+    assert main.get_task_deadline(task_id) is None
+
+    # Niepoprawny termin jest bezpiecznie odrzucany przy dodawaniu.
+    main.add_task_db("Zły termin", is_daily=0, deadline="31.02.2026")
+    bad = [t for t in main.get_tasks(is_daily_view=False) if t[1] == "Zły termin"][0]
+    assert bad[7] is None
+
+
+def test_deadline_migration_adds_column(tmp_path, monkeypatch):
+    import app_logic
+    old_db = str(tmp_path / "stara_baza.db")
+    conn = sqlite3.connect(old_db)
+    conn.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+                 "is_daily INTEGER DEFAULT 0, is_done INTEGER DEFAULT 0, priority TEXT DEFAULT 'B', "
+                 "subtasks TEXT DEFAULT '[]', category TEXT DEFAULT 'Ogólne')")
+    conn.execute("CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+                 "is_done INTEGER DEFAULT 0)")
+    conn.execute("CREATE TABLE completed_archive (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, "
+                 "priority TEXT, completed_at TEXT)")
+    conn.execute("INSERT INTO tasks (title) VALUES ('Stare zadanie')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+
+    assert main.ensure_schema_upgrade(old_db) is True
+    with sqlite3.connect(old_db) as check:
+        columns = [r[1] for r in check.execute("PRAGMA table_info(tasks)").fetchall()]
+    assert "deadline" in columns
+    tasks = main.get_tasks(is_daily_view=False)
+    assert tasks[0][1] == "Stare zadanie"
+    assert tasks[0][7] is None
+
+
+def test_deadline_json_export_import_roundtrip(tmp_path, monkeypatch):
+    import app_logic
+    main.add_task_db("Z terminem JSON", is_daily=0, deadline="2026-11-24")
+    data = main.export_database_to_json_dict()
+    exported = [t for t in data["tasks"] if t["title"] == "Z terminem JSON"][0]
+    assert exported["deadline"] == "2026-11-24"
+
+    # Stary backup bez pola deadline importuje się bez błędu.
+    data["tasks"].append({"title": "Stary backup", "is_daily": 0, "is_done": 0,
+                          "priority": "B", "subtasks": [], "category": "Ogólne"})
+    old_db = str(tmp_path / "import.db")
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+    main.init_db()
+    main.import_database_from_json_dict(data, replace_existing=True)
+    imported = {t[1]: t[7] for t in main.get_tasks(is_daily_view=False)}
+    assert imported["Z terminem JSON"] == "2026-11-24"
+    assert imported["Stary backup"] is None
+
+
+def test_deadline_sorting_filtering_and_reminder_window():
+    today = date(2026, 11, 20)
+
+    def task(tid, title, done, deadline):
+        return (tid, title, 0, done, "B", [], "Ogólne", deadline)
+
+    tasks = [
+        task(1, "Później", 0, "2026-12-24"),
+        task(2, "Bez terminu", 0, None),
+        task(3, "Zaległe", 0, "2026-11-19"),
+        task(4, "Blisko", 0, "2026-11-22"),
+        task(5, "Zrobione z terminem", 1, "2026-11-21"),
+    ]
+    ordered = [t[1] for t in main.sort_tasks_by_deadline(tasks)]
+    assert ordered == ["Zaległe", "Blisko", "Później", "Bez terminu", "Zrobione z terminem"]
+
+    week = [t[1] for t in main.filter_tasks_by_deadline(tasks, "WEEK", today=today)]
+    assert week == ["Blisko", "Zrobione z terminem"]
+    overdue = [t[1] for t in main.filter_tasks_by_deadline(tasks, "OVERDUE", today=today)]
+    assert overdue == ["Zaległe"]
+    assert [t[1] for t in main.filter_tasks_by_deadline(tasks, "ALL", today=today)] == [t[1] for t in tasks]
+
+
+def test_deadline_reminders_from_database_and_hide_today():
+    today = date.today()
+    main.add_task_db("Tuż przed terminem", is_daily=0,
+                     deadline=(today + timedelta(days=1)).isoformat())
+    main.add_task_db("Po terminie", is_daily=0,
+                     deadline=(today - timedelta(days=2)).isoformat())
+    main.add_task_db("Daleko", is_daily=0,
+                     deadline=(today + timedelta(days=30)).isoformat())
+    main.add_task_db("Zrobione", is_daily=0,
+                     deadline=(today + timedelta(days=1)).isoformat())
+    done_task = [t for t in main.get_tasks(is_daily_view=False) if t[1] == "Zrobione"][0]
+    main.toggle_done_db(done_task[0], 1)
+
+    due = main.get_deadline_tasks(within_days=7, include_overdue=True)
+    due_titles = [t[1] for t in due]
+    assert "Tuż przed terminem" in due_titles
+    assert "Po terminie" in due_titles
+    assert "Daleko" not in due_titles
+    assert "Zrobione" not in due_titles
+
+    assert main.should_show_deadline_card() is True
+    main.hide_deadline_card_today()
+    assert main.should_show_deadline_card() is False
+    main.set_config("deadline_card_hidden_date", "")
+
+    main.set_config("deadline_reminders_enabled", "0")
+    assert main.should_show_deadline_card() is False
+    main.set_config("deadline_reminders_enabled", "1")
+    assert main.should_show_deadline_card() is True
+
+
+def test_ui_edit_dialog_sets_deadline():
+    main.add_task_db("Zadanie z terminem", is_daily=1, priority="B")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    # Otwieramy dialog przez przycisk edycji na karcie Daily (bez podkroków:
+    # prio, checkbox, tytuł, edycja, usuń, uchwyt).
+    root_pc = page.controls[0].content
+    content_col = root_pc.content.controls[2].content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    tasks_col.controls[0].content.controls[3].on_click(None)
+
+    edit_task_dialog = page.overlay[3]
+    assert edit_task_dialog.open is True
+    assert isinstance(edit_task_dialog.content, ft.Column)
+    deadline_section = edit_task_dialog.content.controls[2]
+    assert isinstance(deadline_section, ft.Column)
+
+    # Kolejność pól: tytuł, kategoria, termin — testy używają controls[0].
+    assert isinstance(edit_task_dialog.content.controls[0], ft.TextField)
+
+    preset_row = deadline_section.controls[1]
+    next_week_btn = [c for c in preset_row.controls if _control_contains_text(c, "Za tydzień")][0]
+    next_week_btn.on_click(None)
+
+    edit_task_dialog.content.controls[0].value = "Zadanie z terminem"
+    edit_task_dialog.actions[1].on_click(None)
+
+    expected = (date.today() + timedelta(days=7)).isoformat()
+    assert main.get_task_deadline(task_id) == expected
+
+
+def test_ui_master_deadline_filter_and_daily_reminder_card():
+    today = date.today()
+    main.add_task_db("Blisko", is_daily=0, deadline=(today + timedelta(days=2)).isoformat())
+    main.add_task_db("Daleko", is_daily=0, deadline=(today + timedelta(days=30)).isoformat())
+    main.set_config("master_deadline_filter", "WEEK")
+
+    page = DummyPage(width=950)
+    main.main(page)
+    root_pc = page.controls[0].content
+    content_col = root_pc.content.controls[2].content
+
+    # Karta przypomnień na Daily jest kontenerem, więc nie psuje kontraktu
+    # „pierwsza ft.Column w content_area to lista zadań”.
+    assert any(isinstance(c, ft.Column) for c in content_col.controls)
+    assert any(_control_contains_text(c, "Nadchodzące terminy") for c in content_col.controls)
+
+    # Master: filtr „Ten tydzień” ukrywa odległy termin.
+    sidebar_col = root_pc.content.controls[0].content
+    sidebar_col.controls[2].content.on_click(None)
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    assert len(tasks_col.controls) == 1
+
+    # Sortowanie po terminie jest zapamiętywane w configu.
+    main.set_config("master_sort_mode", "DEADLINE")
+    assert main.get_config("master_sort_mode") == "DEADLINE"
+
+
+def test_ui_settings_has_deadline_card():
+    page = DummyPage(width=950)
+    main.main(page)
+    root_pc = page.controls[0].content
+    sidebar_col = root_pc.content.controls[0].content
+    sidebar_col.controls[-1].on_click(None)
+    content_col = root_pc.content.controls[2].content
+    assert any(_control_contains_text(c, "Terminy i przypomnienia") for c in content_col.controls)
 
 
 if __name__ == "__main__":
