@@ -19,7 +19,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.20"
+FALLBACK_VERSION = "1.6.21"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -1012,7 +1012,12 @@ def init_db():
         except sqlite3.OperationalError:
             pass
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, is_done INTEGER DEFAULT 0)")
+            "CREATE TABLE IF NOT EXISTS routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, is_done INTEGER DEFAULT 0, routine_days TEXT DEFAULT '[]')")
+        try:
+            # Dni tygodnia dla rutyny (JSON lista 0=pon..6=niedziela; pusta = codziennie).
+            conn.execute("ALTER TABLE routines ADD COLUMN routine_days TEXT DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("""
                      CREATE TABLE IF NOT EXISTS completed_archive
                      (
@@ -1043,8 +1048,8 @@ def export_database_to_json_dict():
                 "subtasks": subs,
                 "category": r[6] if len(r) > 6 and r[6] else "Ogólne"
             })
-        routines_rows = conn.execute("SELECT id, title, is_done FROM routines").fetchall()
-        routines = [{"id": r[0], "title": r[1], "is_done": r[2]} for r in routines_rows]
+        routines_rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines").fetchall()
+        routines = [{"id": r[0], "title": r[1], "is_done": r[2], "days": _normalize_routine_days(r[3])} for r in routines_rows]
         archive_rows = conn.execute("SELECT id, title, priority, completed_at FROM completed_archive").fetchall()
         archive = [{"id": r[0], "title": r[1], "priority": r[2], "completed_at": r[3]} for r in archive_rows]
         return {
@@ -1098,8 +1103,9 @@ def import_database_from_json_dict(data, replace_existing=False):
             )
         for r in data.get("routines", []):
             conn.execute(
-                "INSERT INTO routines (title, is_done) VALUES (?, ?)",
-                (r.get("title", ""), int(r.get("is_done", 0)))
+                "INSERT INTO routines (title, is_done, routine_days) VALUES (?, ?, ?)",
+                (r.get("title", ""), int(r.get("is_done", 0)),
+                 json.dumps(_normalize_routine_days(r.get("days", [])), ensure_ascii=False))
             )
         for a in data.get("completed_archive", []):
             conn.execute(
@@ -1185,12 +1191,31 @@ def get_tasks(is_daily_view=True):
 
 def get_routines():
     with db_connection() as conn:
-        return conn.execute("SELECT id, title, is_done FROM routines ORDER BY id").fetchall()
+        rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines ORDER BY id").fetchall()
+        return [(r[0], r[1], r[2], _normalize_routine_days(r[3])) for r in rows]
 
 
-def add_routine_db(title):
+def add_routine_db(title, days=None):
+    """Dodaje rutynę. `days` = dni tygodnia (0=poniedziałek ... 6=niedziela); pusta lista = codziennie."""
+    title = (title or "").strip()
+    if not title:
+        return
+    days = _normalize_routine_days(days)
     with db_connection(write=True) as conn:
-        conn.execute("INSERT INTO routines (title) VALUES (?)", (title,))
+        conn.execute("INSERT INTO routines (title, is_done, routine_days) VALUES (?, 0, ?)",
+                     (title, json.dumps(days)))
+    push_database_async()
+
+
+def update_routine_db(routine_id, title, days=None):
+    """Edytuje tytuł i dni tygodnia istniejącej rutyny."""
+    title = (title or "").strip()
+    if not title:
+        return
+    days = _normalize_routine_days(days)
+    with db_connection(write=True) as conn:
+        conn.execute("UPDATE routines SET title = ?, routine_days = ? WHERE id = ?",
+                     (title, json.dumps(days), routine_id))
     push_database_async()
 
 
@@ -1407,6 +1432,71 @@ COLOR_TEXT_SECONDARY = "#8b949e"
 # Kolory słońca dla daily
 COLOR_SUN_ACTIVE = "#facc15"   # żółte (aktywne na daily)
 COLOR_SUN_INACTIVE = "#6b7280" # szare (nieaktywne)
+
+
+# --- DNI TYGODNIA DLA RUTYN (kotwica zgodna z Python weekday(): 0=poniedziałek ... 6=niedziela) ---
+WEEKDAY_LABELS = ["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"]
+WEEKDAY_FULL = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
+
+
+def _normalize_routine_days(days):
+    """Normalizuje dni tygodnia rutyny do posortowanej listy intów 0..6.
+
+    Pusta lista oznacza „codziennie”. Przyjmuje listę, inta albo JSON-string
+    (starsze kopie / surowe wartości z bazy), więc nie psuje się przy obcych danych.
+    """
+    if days is None:
+        return []
+    if isinstance(days, str):
+        try:
+            days = json.loads(days) if days.strip() else []
+        except Exception:
+            return []
+    try:
+        out = []
+        for d in days:
+            i = int(d)
+            if 0 <= i <= 6 and i not in out:
+                out.append(i)
+        out.sort()
+        return out
+    except Exception:
+        return []
+
+
+def routine_days_label(days):
+    """Krótka etykieta dni, np. 'Wt, Śr' ('' dla rutyny codziennej)."""
+    days = _normalize_routine_days(days)
+    return ", ".join(WEEKDAY_LABELS[d] for d in days)
+
+
+def get_daily_routines():
+    """Rutyny widoczne dziś: bez przypisanych dni (codziennie) albo z dzisiejszym dniem tygodnia."""
+    today = datetime.now().weekday()
+    return [r for r in get_routines() if not r[3] or today in r[3]]
+
+
+def build_routine_day_chips(selected, on_toggle):
+    """Kafelki wyboru dnia tygodnia (0..6) dla formularzy rutyn.
+
+    `selected` — zbiór wybranych dni; `on_toggle(day)` — callback po kliknięciu.
+    Żaden zaznaczony dzień = rutyna codzienna.
+    """
+    chips = []
+    for d, name in enumerate(WEEKDAY_LABELS):
+        is_sel = d in selected
+        chips.append(ft.Container(
+            content=ft.Text(name, size=12,
+                            weight=ft.FontWeight.BOLD if is_sel else ft.FontWeight.W_500,
+                            color=COLOR_TEXT_PRIMARY if is_sel else COLOR_TEXT_SECONDARY),
+            bgcolor=COLOR_PRIO_C if is_sel else COLOR_BG_SURFACE,
+            border=ft.Border.all(1, COLOR_PRIO_C if is_sel else COLOR_BG_BORDER),
+            border_radius=8,
+            padding=ft.Padding.symmetric(horizontal=9, vertical=5),
+            tooltip=WEEKDAY_FULL[d],
+            on_click=lambda e, dd=d: on_toggle(dd)
+        ))
+    return chips
 
 # --- INTERFEJS (Flet) ---
 def main(page: ft.Page):
@@ -1641,6 +1731,29 @@ def main(page: ft.Page):
     ha_url_input = ft.TextField(label="Adres serwera HA", value=get_config("ha_url", ""))
     folder_input = ft.TextField(label="Ścieżka folderu lokalnego (PC)", value=get_config("sync_folder", ""))
     routine_input = ft.TextField(label="Nowa rutyna (np. Leki, Woda)", expand=True)
+
+    # --- Dni tygodnia dla rutyn: stan formularza dodawania ---
+    routine_add_days = set()
+
+    def toggle_routine_add_day(day):
+        """Kliknięcie kafelka dnia w formularzu dodawania (odświeża zaznaczenia)."""
+        if day in routine_add_days:
+            routine_add_days.discard(day)
+        else:
+            routine_add_days.add(day)
+        refresh_view()
+
+    def save_routine_add(e=None):
+        """Zapisuje nową rutynę z zaznaczonymi dniami (puste zaznaczenie = codziennie)."""
+        title = (routine_input.value or "").strip()
+        if title:
+            add_routine_db(title, sorted(routine_add_days))
+            status_text.value = "✓ Dodano rutynę"
+        else:
+            status_text.value = ""
+        routine_input.value = ""
+        routine_add_days.clear()
+        refresh_view()
 
     def change_sync_mode(mode_name):
         nonlocal max_a_limit
@@ -2141,15 +2254,70 @@ def main(page: ft.Page):
             warning_text.value = f"⚠️ {msg}"
         refresh_view()
 
+    # --- EDYCJA RUTYNY (tytuł + dni tygodnia) ---
+    edit_routine_title_field = ft.TextField(
+        label="Nazwa rutyny",
+        bgcolor=COLOR_BG_SURFACE,
+        border_color=COLOR_BG_BORDER,
+        focused_border_color=COLOR_PRIO_C,
+        dense=True,
+    )
+    edit_routine_chips = ft.Column([], tight=True, wrap=True)
+    routine_edit_days = set()
+    editing_routine_id = None
+
+    def open_edit_routine_dialog(rid, current_title, current_days):
+        nonlocal editing_routine_id, routine_edit_days
+        editing_routine_id = rid
+        routine_edit_days = set(_normalize_routine_days(current_days))
+        edit_routine_title_field.value = current_title
+        edit_routine_chips.controls = build_routine_day_chips(routine_edit_days, toggle_edit_routine_day)
+        edit_routine_dialog.open = True
+        page.update()
+
+    def toggle_edit_routine_day(day):
+        """Kliknięcie kafelka dnia w oknie edycji — odświeża tylko kafelki (okno zostaje otwarte)."""
+        if day in routine_edit_days:
+            routine_edit_days.discard(day)
+        else:
+            routine_edit_days.add(day)
+        edit_routine_chips.controls = build_routine_day_chips(routine_edit_days, toggle_edit_routine_day)
+        page.update()
+
+    def save_routine_edit(e=None):
+        nonlocal editing_routine_id
+        title = (edit_routine_title_field.value or "").strip()
+        if editing_routine_id and title:
+            update_routine_db(editing_routine_id, title, sorted(routine_edit_days))
+            editing_routine_id = None
+            edit_routine_dialog.open = False
+            status_text.value = "✓ Zaktualizowano rutynę"
+            warning_text.value = ""
+        refresh_view()
+
+    edit_routine_dialog = ft.AlertDialog(
+        title=ft.Text("✏️ Edytuj rutynę"),
+        content=ft.Column([
+            edit_routine_title_field,
+            ft.Text("Dni tygodnia (odznacz wszystkie = codziennie):", size=12, color=COLOR_TEXT_SECONDARY),
+            edit_routine_chips
+        ], tight=True, spacing=10),
+        actions=[
+            ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
+            ft.Button("Zapisz", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=save_routine_edit)
+        ]
+    )
+
     def close_dialogs():
         quick_dialog.open = master_dialog.open = subtask_dialog.open = False
         edit_task_dialog.open = delete_task_dialog.open = edit_subtask_dialog.open = clear_archive_dialog.open = False
-        end_of_day_dialog.open = import_confirm_dialog.open = False
+        end_of_day_dialog.open = import_confirm_dialog.open = edit_routine_dialog.open = False
         page.update()
 
     # Kolejność overlay jest używana przez testy (indeksy 3,4,5) — nowe okna tylko na końcu.
     page.overlay.extend([quick_dialog, master_dialog, subtask_dialog, edit_task_dialog, delete_task_dialog,
-                         edit_subtask_dialog, clear_archive_dialog, end_of_day_dialog, import_confirm_dialog])
+                         edit_subtask_dialog, clear_archive_dialog, end_of_day_dialog, import_confirm_dialog,
+                         edit_routine_dialog])
 
     def open_quick_modal(e):
         quick_dump_field.value = ""
@@ -2452,6 +2620,11 @@ def main(page: ft.Page):
                     content=ft.Row([
                         ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=16, color=COLOR_SUCCESS),
                         ft.Text(r[1], expand=True, size=13, color=COLOR_TEXT_PRIMARY),
+                        ft.Text(routine_days_label(r[3]), size=11, color=COLOR_PRIO_C, weight=ft.FontWeight.W_500,
+                                tooltip=", ".join(WEEKDAY_FULL[d] for d in r[3])) if r[3] else ft.Text("Codziennie", size=11, color=COLOR_TEXT_SECONDARY),
+                        ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=17, icon_color=COLOR_TEXT_SECONDARY,
+                                      tooltip="Edytuj rutynę",
+                                      on_click=lambda e, rid=r[0], rtitle=r[1], rdays=r[3]: open_edit_routine_dialog(rid, rtitle, rdays)),
                         ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=18, icon_color=COLOR_PRIO_A, tooltip="Usuń rutynę",
                                       on_click=lambda e, rid=r[0]: (delete_routine_db(rid), refresh_view()))
                     ])
@@ -2462,13 +2635,13 @@ def main(page: ft.Page):
                 bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
                 content=ft.Column([
                     ft.Text("Nawyki i Rutyny (Nie obciążają limitu A)", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY),
+                    ft.Text("Zaznacz dni tygodnia, w które rutyna ma się pokazywać na Daily (odznaczone = codziennie).",
+                            size=12, color=COLOR_TEXT_SECONDARY),
                     ft.Row([
                         routine_input,
-                        ft.Button("Dodaj", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
-                                  on_click=lambda e: (add_routine_db(routine_input.value.strip()),
-                                                      setattr(routine_input, 'value', ''),
-                                                      refresh_view()))
+                        ft.Button("Dodaj", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, on_click=save_routine_add)
                     ]),
+                    ft.Row(build_routine_day_chips(routine_add_days, toggle_routine_add_day), spacing=6),
                     rout_list if rout_db else ft.Text("Brak zdefiniowanych rutyn", size=12, color=COLOR_TEXT_SECONDARY)
                 ], spacing=10)
             )
@@ -2755,7 +2928,9 @@ def main(page: ft.Page):
         is_daily_mode = (current_view == "daily")
         title_text.value = "Daily" if is_daily_mode else "Master Lista"
         all_view_tasks = get_tasks(is_daily_view=is_daily_mode)
-        all_routines = get_routines()
+        # Rutyny przypisane do konkretnych dni pokazują się na Daily tylko tego dnia
+        # (rutyna bez dni = codzienna). Na Daily liczymy też postęp tylko z nich.
+        all_routines = get_daily_routines() if is_daily_mode else get_routines()
 
         if is_daily_mode:
             prog_val = calculate_progress_logic(all_view_tasks, all_routines, active_subtask_idx_map)
@@ -2767,7 +2942,7 @@ def main(page: ft.Page):
             progress_text.weight = ft.FontWeight.BOLD
 
             for r in all_routines:
-                rid, rname, cdone = r[0], r[1], r[2]
+                rid, rname, cdone, rdays = r[0], r[1], r[2], r[3]
                 is_r_done = bool(cdone)
                 routines_row.controls.append(
                     ft.Container(
@@ -2781,7 +2956,9 @@ def main(page: ft.Page):
                                     color=COLOR_SUCCESS if is_r_done else COLOR_TEXT_SECONDARY),
                             ft.Text(rname, size=12, color=COLOR_TEXT_PRIMARY if is_r_done else COLOR_TEXT_SECONDARY,
                                     weight=ft.FontWeight.W_500,
-                                    style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_r_done else None))
+                                    style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_r_done else None)),
+                            ft.Text(routine_days_label(rdays), size=10, color=COLOR_PRIO_C, weight=ft.FontWeight.W_500,
+                                    style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_r_done else None)) if rdays else ft.Container()
                         ], spacing=6, tight=True)
                     )
                 )

@@ -131,6 +131,58 @@ def test_routines_crud():
     assert len(main.get_routines()) == 1
 
 
+def test_routine_days_crud():
+    # Rutyna codzienna (brak dni) oraz rutyna na konkretne dni tygodnia.
+    main.add_routine_db("Woda")
+    main.add_routine_db("Leki", days=[1, 3])  # wtorek i czwartek
+
+    by_title = {r[1]: r[3] for r in main.get_routines()}
+    assert by_title["Woda"] == []
+    assert by_title["Leki"] == [1, 3]
+    assert main.routine_days_label([1, 3]) == "Wt, Cz"
+
+    # Edycja rutyny: tytuł i dni można zmienić później.
+    rid = [r[0] for r in main.get_routines() if r[1] == "Leki"][0]
+    main.update_routine_db(rid, "Leki poranne", days=[0, 2, 4])
+    updated = {r[1]: r[3] for r in main.get_routines()}
+    assert updated["Leki poranne"] == [0, 2, 4]
+    assert "Leki" not in updated
+
+
+def test_routine_days_normalized():
+    # Odporne na śmieci: duplikaty, dni spoza zakresu, wartości zapisane jako JSON-string.
+    main.add_routine_db("Duplikaty", days=[1, 1, 7, -2, "2"])
+    assert main.get_routines()[0][3] == [1, 2]
+    assert main.routine_days_label("[]") == ""
+    assert main.routine_days_label(None) == ""
+
+
+def test_daily_routines_filtered_by_weekday():
+    from datetime import datetime
+    today = datetime.now().weekday()
+    tomorrow = (today + 1) % 7
+
+    main.add_routine_db("Dzisiejsza", days=[today])
+    main.add_routine_db("Codzienna")
+    main.add_routine_db("Inny dzien", days=[tomorrow])
+
+    daily = [r[1] for r in main.get_daily_routines()]
+    assert "Dzisiejsza" in daily
+    assert "Codzienna" in daily
+    assert "Inny dzien" not in daily
+
+
+def test_routine_days_json_roundtrip():
+    main.add_routine_db("Leki", days=[0, 3])
+    exported = main.export_database_to_json_dict()
+    routine = [r for r in exported["routines"] if r["title"] == "Leki"][0]
+    assert routine["days"] == [0, 3]
+
+    main.import_database_from_json_dict(exported, replace_existing=True)
+    restored = {r[1]: r[3] for r in main.get_routines()}
+    assert restored["Leki"] == [0, 3]
+
+
 # --- 3. TESTY PODKROKÓW (SUBTASKS) ---
 def test_subtasks():
     main.add_task_db("Projekt", is_daily=1, priority="A")
