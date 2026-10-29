@@ -2,6 +2,7 @@ import base64
 import gc
 import json
 import os
+import sqlite3
 import sys
 import urllib.request
 import pytest
@@ -181,6 +182,87 @@ def test_routine_days_json_roundtrip():
     main.import_database_from_json_dict(exported, replace_existing=True)
     restored = {r[1]: r[3] for r in main.get_routines()}
     assert restored["Leki"] == [0, 3]
+
+
+# --- 2a. MIGRACJA SCHEMATU (stare bazy bez routine_days) ---
+def _make_old_schema_db(path, routine_title="Leki"):
+    """Baza w schemacie sprzed dni tygodnia — tak wygląda kopia ze starej wersji."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            "is_daily INTEGER DEFAULT 0, is_done INTEGER DEFAULT 0, priority TEXT DEFAULT 'B')")
+        conn.execute(
+            "CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "title TEXT NOT NULL, is_done INTEGER DEFAULT 0)")
+        conn.execute(
+            "CREATE TABLE completed_archive (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "title TEXT NOT NULL, priority TEXT DEFAULT 'B', completed_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO routines (title, is_done) VALUES (?, 0)", (routine_title,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _routines_columns(path):
+    conn = sqlite3.connect(path)
+    try:
+        return {row[1] for row in conn.execute("PRAGMA table_info(routines)").fetchall()}
+    finally:
+        conn.close()
+
+
+def test_init_db_migrates_old_routines_schema(tmp_path, monkeypatch):
+    """Start aplikacji na bazie ze starej wersji musi dodać kolumnę routine_days."""
+    import app_logic
+
+    old_db = str(tmp_path / "old_tasks.db")
+    _make_old_schema_db(old_db)
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+
+    main.init_db()
+
+    routines = main.get_routines()
+    assert [r[1] for r in routines] == ["Leki"]
+    assert routines[0][3] == []  # brak dni = codziennie
+    assert "routine_days" in _routines_columns(old_db)
+
+
+def test_get_routines_self_heals_old_schema(tmp_path, monkeypatch):
+    """SELECT na starej bazie (np. po pullu z chmury) nie może wywalić widoku."""
+    import app_logic
+
+    old_db = str(tmp_path / "pulled_tasks.db")
+    _make_old_schema_db(old_db, "Woda")
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+
+    routines = main.get_routines()  # wcześniej: sqlite3.OperationalError
+
+    assert [r[1] for r in routines] == ["Woda"]
+    assert routines[0][3] == []
+    assert "routine_days" in _routines_columns(old_db)
+    # Po migracji zapis i odczyt dni działa normalnie.
+    main.update_routine_db(routines[0][0], "Woda", days=[2])
+    assert main.get_routines()[0][3] == [2]
+
+
+def test_restore_from_bytes_migrates_schema(tmp_path, monkeypatch):
+    """Baza pobrana z chmury (stary schemat) jest migrowana po podmianie pliku."""
+    import app_logic
+
+    pulled_db = str(tmp_path / "gist_tasks.db")
+    _make_old_schema_db(pulled_db, "Medytacja")
+    with open(pulled_db, "rb") as f:
+        data = f.read()
+
+    ok, _ = app_logic._restore_db_from_bytes(data, "testowa baza")
+    assert ok
+
+    routines = main.get_routines()
+    assert [r[1] for r in routines] == ["Medytacja"]
+    assert "routine_days" in _routines_columns(app_logic.LOCAL_DB)
 
 
 # --- 3. TESTY PODKROKÓW (SUBTASKS) ---

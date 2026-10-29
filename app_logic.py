@@ -19,7 +19,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.21"
+FALLBACK_VERSION = "1.6.22"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -371,6 +371,8 @@ def restore_pre_sync_backup(snapshot_path=None):
         make_local_snapshot("pre_restore")
     ok, msg = backup_database(LOCAL_DB, source_path=target)
     if ok:
+        # Snapshot może pochodzić sprzed migracji schematu.
+        ensure_schema_upgrade()
         LOG.info("Przywrócono snapshot: %s", target)
         push_database_async()
         return True, f"Przywrócono kopię: {os.path.basename(target)}"
@@ -427,6 +429,8 @@ def _restore_db_from_bytes(data, label="pobraną bazę"):
         with open(tmp_path, "wb") as f:
             f.write(data)
         backup_database(LOCAL_DB, source_path=tmp_path)
+        # Pobrana baza może mieć schemat starszy od działającego kodu.
+        ensure_schema_upgrade()
     finally:
         try:
             if os.path.exists(tmp_path):
@@ -587,6 +591,8 @@ def pull_database(force=False):
                     return False, f"Odrzucono: Plik jest uszkodzony ({status})"
                 make_local_snapshot("pre_pull")
                 backup_database(LOCAL_DB, source_path=remote_file)
+                # Baza z folderu może pochodzić ze starszej wersji (brak nowych kolumn).
+                ensure_schema_upgrade()
                 set_config("folder_push_mtime", str(os.path.getmtime(remote_file)))
                 return True, "Pobrano bazę z folderu"
             except Exception as e:
@@ -964,6 +970,58 @@ def activate_downloaded_ota(page, expected_version=""):
 
 
 # --- BAZA DANYCH I LOGIKA ---
+def _table_columns(conn, table):
+    """Nazwy kolumn istniejącej tabeli (pusty zbiór = tabeli jeszcze nie ma)."""
+    try:
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except sqlite3.Error:
+        return set()
+
+
+def _ensure_column(conn, table, column, ddl):
+    """Dodaje brakującą kolumnę. Bezpieczne przy każdym wywołaniu (no-op gdy jest)."""
+    cols = _table_columns(conn, table)
+    if not cols or column in cols:
+        return False
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        LOG.info("Migracja schematu: dodano kolumnę %s.%s", table, column)
+        return True
+    except sqlite3.OperationalError as e:
+        # „duplicate column” to zwykły wyścig i można go zignorować. Każdy inny
+        # błąd (np. zablokowany plik) musi trafić do logu — wcześniej był połykany
+        # i brak kolumny objawiał się dopiero jako „no such column” w widoku.
+        if "duplicate column" in str(e).lower() or column in _table_columns(conn, table):
+            return False
+        LOG.warning("Migracja schematu: nie udało się dodać %s.%s: %s", table, column, e)
+        return False
+
+
+def ensure_schema(conn):
+    """Domyka schemat (migracje) na istniejącym połączeniu. Idempotentne."""
+    _ensure_column(conn, "tasks", "subtasks", "TEXT DEFAULT '[]'")
+    _ensure_column(conn, "tasks", "category", "TEXT DEFAULT 'Ogólne'")
+    _ensure_column(conn, "routines", "routine_days", "TEXT DEFAULT '[]'")
+
+
+def ensure_schema_upgrade(db_path=None):
+    """Migruje schemat bazy po jej podmianie (pull z chmury, snapshot, import).
+
+    Każde miejsce, które wstawia do LOCAL_DB plik innej bazy (Gist/HA/folder,
+    snapshot, przywracanie po uszkodzeniu), musi potem to wywołać: starsza kopia
+    nie ma nowych kolumn i bez migracji `SELECT ... routine_days` kończy się
+    `sqlite3.OperationalError: no such column`. write=False — sama migracja
+    schematu nie może przesuwać db_last_change (inaczej pull z chmury staje).
+    """
+    try:
+        with db_connection(db_path) as conn:
+            ensure_schema(conn)
+        return True
+    except Exception as e:
+        LOG.warning("Migracja schematu po podmianie bazy nie powiodła się: %s", e)
+        return False
+
+
 def init_db():
     init_config_db()
     ok, msg = ensure_db_health()
@@ -1003,21 +1061,8 @@ def init_db():
                          '[]'
                      )
                      """)
-        try:
-            conn.execute("ALTER TABLE tasks ADD COLUMN subtasks TEXT DEFAULT '[]'")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute("ALTER TABLE tasks ADD COLUMN category TEXT DEFAULT 'Ogólne'")
-        except sqlite3.OperationalError:
-            pass
         conn.execute(
             "CREATE TABLE IF NOT EXISTS routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, is_done INTEGER DEFAULT 0, routine_days TEXT DEFAULT '[]')")
-        try:
-            # Dni tygodnia dla rutyny (JSON lista 0=pon..6=niedziela; pusta = codziennie).
-            conn.execute("ALTER TABLE routines ADD COLUMN routine_days TEXT DEFAULT '[]'")
-        except sqlite3.OperationalError:
-            pass
         conn.execute("""
                      CREATE TABLE IF NOT EXISTS completed_archive
                      (
@@ -1027,11 +1072,17 @@ def init_db():
                          completed_at TEXT NOT NULL
                      )
                      """)
+        # Migracje kolumn dla baz utworzonych przez starsze wersje (także tych
+        # pobranych z chmury/snapshotu). Wcześniej każda była w try/except i przy
+        # zablokowanym pliku migracja przechodziła niezauważona, a SELECT na
+        # nowej kolumnie wywalał widok: „no such column: routine_days”.
+        ensure_schema(conn)
 
 
 def export_database_to_json_dict():
     """Eksportuje całą zawartość bazy (zadania, rutyny, archiwum) do słownika JSON."""
     with db_connection() as conn:
+        ensure_schema(conn)
         tasks_rows = conn.execute("SELECT id, title, is_daily, is_done, priority, subtasks, category FROM tasks").fetchall()
         tasks = []
         for r in tasks_rows:
@@ -1089,6 +1140,8 @@ def import_database_from_json_dict(data, replace_existing=False):
     """Importuje zadania, rutyny i archiwum ze słownika JSON do SQLite."""
     make_local_snapshot("pre_import")
     with db_connection(write=True) as conn:
+        # Import do bazy ze starszym schematem nie może się wywalić na nowej kolumnie.
+        ensure_schema(conn)
         if replace_existing:
             conn.execute("DELETE FROM tasks")
             conn.execute("DELETE FROM routines")
@@ -1189,10 +1242,30 @@ def get_tasks(is_daily_view=True):
         return result
 
 
+def _select_routines(conn):
+    rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines ORDER BY id").fetchall()
+    return [(r[0], r[1], r[2], _normalize_routine_days(r[3])) for r in rows]
+
+
 def get_routines():
-    with db_connection() as conn:
-        rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines ORDER BY id").fetchall()
-        return [(r[0], r[1], r[2], _normalize_routine_days(r[3])) for r in rows]
+    try:
+        with db_connection() as conn:
+            return _select_routines(conn)
+    except sqlite3.OperationalError as e:
+        # Baza pobrana z chmury/snapshotu może mieć schemat sprzed kolumny
+        # routine_days („no such column”). Domykamy schemat i próbujemy raz
+        # jeszcze, a gdy to nie pomoże — czytamy rutyny bez dni tygodnia, żeby
+        # widok nigdy nie padł na starszym pliku bazy.
+        LOG.warning("get_routines: %s — domykam schemat bazy", e)
+        ensure_schema_upgrade()
+        try:
+            with db_connection() as conn:
+                return _select_routines(conn)
+        except sqlite3.OperationalError as e2:
+            LOG.error("get_routines: %s — czytam rutyny bez dni tygodnia", e2)
+            with db_connection() as conn:
+                rows = conn.execute("SELECT id, title, is_done FROM routines ORDER BY id").fetchall()
+            return [(r[0], r[1], r[2], []) for r in rows]
 
 
 def add_routine_db(title, days=None):
@@ -1202,6 +1275,7 @@ def add_routine_db(title, days=None):
         return
     days = _normalize_routine_days(days)
     with db_connection(write=True) as conn:
+        ensure_schema(conn)
         conn.execute("INSERT INTO routines (title, is_done, routine_days) VALUES (?, 0, ?)",
                      (title, json.dumps(days)))
     push_database_async()
@@ -1214,6 +1288,7 @@ def update_routine_db(routine_id, title, days=None):
         return
     days = _normalize_routine_days(days)
     with db_connection(write=True) as conn:
+        ensure_schema(conn)
         conn.execute("UPDATE routines SET title = ?, routine_days = ? WHERE id = ?",
                      (title, json.dumps(days), routine_id))
     push_database_async()

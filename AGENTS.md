@@ -7,7 +7,7 @@ Osobisty menedżer zadań dla osób z ADHD: **Python + Flet 1.0.4 + SQLite**, dz
 ## Komendy
 
 ```powershell
-python -m pytest test_app.py -q                       # całość (39 testów, ~9 s)
+python -m pytest test_app.py -q                       # całość (42 testy, ~9 s)
 python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 .\.venv\Scripts\flet.exe run main.py                  # uruchomienie na PC
 ```
@@ -22,8 +22,8 @@ python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 |---|---|
 | `main.py` | Entrypoint: OTA z GitHuba, splash, wybór modułu (`app_logic_ota.py` albo wbudowany `app_logic`), rollback, ekran błędu. Na końcu re-eksport symboli `app_logic` **bez** `main` (dawniej `from app_logic import *` nadpisywał entrypoint). |
 | `app_logic.py` | ~3800 linii: schemat i operacje SQLite, konfiguracja, snapshoty, backup/import JSON, synchronizacja (Gist/HA/folder), logowanie, instalacja/aktywacja OTA oraz cały interfejs Flet w `main(page)`. |
-| `test_app.py` | 39 testów: CRUD, rutyny (w tym dni tygodnia), podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile, OTA (wybór wersji, instalacja, aktywacja, rollback). `DummyPage` + tymczasowe bazy. |
-| `version.txt` | Aktualna wersja (1.6.21). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
+| `test_app.py` | 42 testy: CRUD, rutyny (w tym dni tygodnia), migracje schematu starych baz, podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile, OTA (wybór wersji, instalacja, aktywacja, rollback). `DummyPage` + tymczasowe bazy. |
+| `version.txt` | Aktualna wersja (1.6.22). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
 | `.github/workflows/build.yml` | CI: pytest → APK → Release `latest`. |
 | `assets/icon.png` | Ikona aplikacji. |
 | `FIX_SUMMARY.md`, `README_OTA_FIX.md` | Historyczne, opisują stan 1.6.17 — nieaktualne. |
@@ -53,6 +53,7 @@ main.py::main → load_and_run()          (jedyny loader; nie ma drugiej ścież
 - Rutyny: `routines.routine_days` to JSON z intami `0..6` (0 = poniedziałek … 6 = niedziela, konwencja `datetime.weekday()`); `[]` = codziennie, a rutyny zapisane przed tą kolumną są traktowane jak codzienne. `get_routines()` zwraca krotki `(id, title, is_done, days)`, zapis przez `add_routine_db(title, days=None)` / `update_routine_db(id, title, days=None)` (ta druga obsługuje edycję z Ustawień), a widok Daily filtruje rutyny przez `get_daily_routines()`. JSON export/import przenosi `days`.
 - Folder danych: `%USERPROFILE%\.master_adhd_data\` (Android: `FLET_APP_STORAGE_DATA/.master_adhd_data`). Tam też `master_adhd.log`, `snapshots/`, pliki OTA.
 - Zapis wyłącznie przez `db_connection(write=True)` (WAL, `busy_timeout`, `RLock`, zawsze `close()`). `write=True` przy `LOCAL_DB` przesuwa `db_last_change` — bez tego zmiana nie jest widoczna dla rozstrzygania konfliktów synchronizacji.
+- Migracje schematu: `ensure_schema(conn)` dodaje brakujące kolumny (`tasks.subtasks`, `tasks.category`, `routines.routine_days`) przez `PRAGMA table_info` + `ALTER TABLE`. Wywołują ją `init_db()`, `export_database_to_json_dict()`, `import_database_from_json_dict()`, `add_routine_db()` i `update_routine_db()`. **Każde miejsce, które podmienia plik `LOCAL_DB` bajtami innej bazy (pull Gist/HA/folder, `_restore_db_from_bytes`, `restore_pre_sync_backup`), musi po tym wywołać `ensure_schema_upgrade()`** — inaczej stara kopia bez nowej kolumny wywala `SELECT` w widoku (`no such column`).
 - Kopie przez `backup_database()` (`sqlite3.Connection.backup()`), nigdy `shutil.copy2`.
 - Snapshoty: `snapshots/tasks_<tag>_<czas>.db` obok `LOCAL_DB`, rotacja `SNAPSHOT_LIMIT=10`, sortowanie po mtime.
 
@@ -97,4 +98,5 @@ ZASADA GIT: Po wykonaniu git commit i git push NIGDY nie uruchamiaj gh run watch
 - `activate_downloaded_ota()` woła `module.main(page)` w tym samym procesie. Stare wątki (timer, sync) mogą jeszcze chwilę żyć — dlatego przed podmianą UI wołane jest `flush_pending_sync(timeout=2.0)`, a `page.overlay`/`page.controls` są czyszczone.
 - Edycja zadania z widoku Daily (`open_edit_task_dialog(tid, tit)` bez `current_category`) ustawia dropdown na „Ogólne” i nadpisuje kategorię przy zapisie.
 - `init_db()` nie może ruszać `db_last_change` (jest test) — inaczej pull z chmury nigdy nic nie pobierze.
+- **`no such column: routine_days`** (crash widoku po starcie/pullu) = baza bez nowej kolumny, np. kopia z chmury/snapshotu sprzed 1.6.21. `get_routines()` sama domyka schemat i ponawia `SELECT` (ostatecznie czyta bez dni tygodnia), ale każde nowe miejsce podmieniające plik `LOCAL_DB` musi wołać `ensure_schema_upgrade()`. Uwaga: stary wzorzec `ALTER TABLE ... except sqlite3.OperationalError: pass` połykał także „database is locked”, więc migracja mogła cicho nie wykonać się wcale — `_ensure_column()` sprawdza `PRAGMA table_info` i loguje realne błędy.
 - W APK, które użytkownicy mają **przed** wersją 1.6.19, działa stary, zepsuty loader. Pierwsza naprawa wymaga jednorazowej instalacji nowego APK; dopiero potem OTA działa automatycznie.
