@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.27"
+FALLBACK_VERSION = "1.6.28"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -1023,7 +1023,18 @@ def ensure_schema(conn):
     _ensure_column(conn, "tasks", "deadline", "TEXT")
     _ensure_column(conn, "tasks", "created_at", "TEXT")
     _ensure_column(conn, "tasks", "updated_at", "TEXT")
+    _ensure_column(conn, "tasks", "estimate_min", "INTEGER")
     _ensure_column(conn, "routines", "routine_days", "TEXT DEFAULT '[]'")
+    # SPRINT 3.1: historia rutyn (dni, w które rutyna była zrobiona). Tabela
+    # powstaje też na starych bazach z chmury/snapshotu — inaczej SELECT kończy
+    # się „no such table: routine_log”.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS routine_log ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "routine_id INTEGER NOT NULL, "
+        "date TEXT NOT NULL, "
+        "done INTEGER DEFAULT 0, "
+        "UNIQUE(routine_id, date))")
     _backfill_task_timestamps(conn)
 
 
@@ -1106,11 +1117,17 @@ def init_db():
                          created_at
                          TEXT,
                          updated_at
-                         TEXT
+                         TEXT,
+                         estimate_min
+                         INTEGER
                      )
                      """)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, is_done INTEGER DEFAULT 0, routine_days TEXT DEFAULT '[]')")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS routine_log ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, routine_id INTEGER NOT NULL, "
+            "date TEXT NOT NULL, done INTEGER DEFAULT 0, UNIQUE(routine_id, date))")
         conn.execute("""
                      CREATE TABLE IF NOT EXISTS completed_archive
                      (
@@ -1133,7 +1150,7 @@ def export_database_to_json_dict():
         ensure_schema(conn)
         tasks_rows = conn.execute(
             "SELECT id, title, is_daily, is_done, priority, subtasks, category, deadline, "
-            "created_at, updated_at FROM tasks").fetchall()
+            "created_at, updated_at, estimate_min FROM tasks").fetchall()
         tasks = []
         for r in tasks_rows:
             try:
@@ -1150,10 +1167,13 @@ def export_database_to_json_dict():
                 "category": r[6] if len(r) > 6 and r[6] else "Ogólne",
                 "deadline": (r[7] or "") if len(r) > 7 else "",
                 "created_at": (r[8] or "") if len(r) > 8 else "",
-                "updated_at": (r[9] or "") if len(r) > 9 else ""
+                "updated_at": (r[9] or "") if len(r) > 9 else "",
+                "estimate_min": (r[10] if len(r) > 10 else None)
             })
         routines_rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines").fetchall()
         routines = [{"id": r[0], "title": r[1], "is_done": r[2], "days": _normalize_routine_days(r[3])} for r in routines_rows]
+        log_rows = conn.execute("SELECT routine_id, date, done FROM routine_log").fetchall()
+        routine_log = [{"routine_id": r[0], "date": r[1], "done": int(r[2] or 0)} for r in log_rows]
         archive_rows = conn.execute("SELECT id, title, priority, completed_at FROM completed_archive").fetchall()
         archive = [{"id": r[0], "title": r[1], "priority": r[2], "completed_at": r[3]} for r in archive_rows]
         return {
@@ -1161,6 +1181,7 @@ def export_database_to_json_dict():
             "exported_at": datetime.now().isoformat(timespec="seconds"),
             "tasks": tasks,
             "routines": routines,
+            "routine_log": routine_log,
             "completed_archive": archive
         }
 
@@ -1198,6 +1219,7 @@ def import_database_from_json_dict(data, replace_existing=False):
         if replace_existing:
             conn.execute("DELETE FROM tasks")
             conn.execute("DELETE FROM routines")
+            conn.execute("DELETE FROM routine_log")
             conn.execute("DELETE FROM completed_archive")
 
         import_now = now_iso()
@@ -1206,17 +1228,28 @@ def import_database_from_json_dict(data, replace_existing=False):
             updated = (t.get("updated_at") or "").strip() or created
             conn.execute(
                 "INSERT INTO tasks (title, is_daily, is_done, priority, subtasks, category, deadline, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, updated_at, estimate_min) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (t.get("title", ""), int(t.get("is_daily", 0)), int(t.get("is_done", 0)),
                  t.get("priority", "B"), json.dumps(t.get("subtasks", []), ensure_ascii=False),
-                 t.get("category", "Ogólne"), normalize_deadline(t.get("deadline")), created, updated)
+                 t.get("category", "Ogólne"), normalize_deadline(t.get("deadline")), created, updated,
+                 normalize_estimate_min(t.get("estimate_min")))
             )
+        oldid_to_newid = {}
         for r in data.get("routines", []):
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO routines (title, is_done, routine_days) VALUES (?, ?, ?)",
                 (r.get("title", ""), int(r.get("is_done", 0)),
                  json.dumps(_normalize_routine_days(r.get("days", [])), ensure_ascii=False))
             )
+            if r.get("id") is not None:
+                oldid_to_newid[r.get("id")] = cursor.lastrowid
+        for entry in data.get("routine_log", []) or []:
+            new_id = oldid_to_newid.get(entry.get("routine_id"))
+            if new_id and entry.get("date"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO routine_log (routine_id, date, done) VALUES (?, ?, ?)",
+                    (new_id, str(entry.get("date")), int(entry.get("done", 0)))
+                )
         for a in data.get("completed_archive", []):
             conn.execute(
                 "INSERT INTO completed_archive (title, priority, completed_at) VALUES (?, ?, ?)",
@@ -1389,6 +1422,10 @@ def get_tasks(is_daily_view=True):
 # --- TERMINY ZADAŃ (deadline) ---
 # Wartość-sentinel: pozwala odróżnić „nie zmieniaj terminu” od „wyczyść termin”.
 DEADLINE_UNSET = object()
+
+# --- SPRINT 3.4: szacowany czas (estimate_min) ---
+# Sentinel jak wyżej: „nie zmieniaj szacunku” vs „wyczyść szacunek”.
+ESTIMATE_UNSET = object()
 
 
 def parse_deadline_input(value, today=None):
@@ -1616,6 +1653,90 @@ def get_stale_task_ids(days=STALE_TASK_DAYS, now=None):
     }
 
 
+# --- SPRINT 3.4: SZACOWANY CZAS (estimate_min) ---
+def normalize_estimate_min(value):
+    """Zamienia wejście na dodatnią liczbę minut albo None (nigdy nie rzuca).
+
+    Akceptuje int, float, „45", „45,5" itd. Wartości <= 0 i śmieci oznaczają brak
+    szacunku — nigdy nie udajemy, że zadanie ma czas.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        minutes = int(round(float(text)))
+    except (TypeError, ValueError):
+        return None
+    return minutes if minutes > 0 else None
+
+
+def format_duration_pl(minutes):
+    """Czytelny czas: 100 -> „1 h 40 min", 45 -> „45 min", 60 -> „1 h"."""
+    if not minutes or minutes <= 0:
+        return ""
+    hours, mins = divmod(int(minutes), 60)
+    if hours and mins:
+        return f"{hours} h {mins} min"
+    if hours:
+        return f"{hours} h"
+    return f"{mins} min"
+
+
+def sum_estimates(estimates_map, tasks):
+    """Suma szacunków zadań: zwraca (suma_minut, liczba_zadań_bez_szacunku).
+
+    `estimates_map` to {task_id: estimate_min}. Brak szacunku nie psuje sumy —
+    tylko zwiększa licznik „bez szacunku”.
+    """
+    total = 0
+    missing = 0
+    for task in tasks or []:
+        estimate = normalize_estimate_min((estimates_map or {}).get(task[0]))
+        if estimate:
+            total += estimate
+        else:
+            missing += 1
+    return total, missing
+
+
+def get_task_estimate(task_id):
+    """Szacowany czas zadania w minutach albo None (do wypełnienia dialogu edycji)."""
+    try:
+        with db_connection() as conn:
+            row = conn.execute("SELECT estimate_min FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            return (row[0] or None) if row else None
+    except sqlite3.OperationalError:
+        ensure_schema_upgrade()
+        with db_connection() as conn:
+            row = conn.execute("SELECT estimate_min FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            return (row[0] or None) if row else None
+
+
+def get_estimates_map():
+    """Mapa {task_id: estimate_min} dla wszystkich zadań (podsumowanie dnia)."""
+    try:
+        with db_connection() as conn:
+            ensure_schema(conn)
+            rows = conn.execute("SELECT id, estimate_min FROM tasks").fetchall()
+    except sqlite3.OperationalError as e:
+        LOG.warning("get_estimates_map: %s — domykam schemat bazy", e)
+        ensure_schema_upgrade()
+        with db_connection() as conn:
+            rows = conn.execute("SELECT id, estimate_min FROM tasks").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def set_task_estimate_db(task_id, estimate_min):
+    """Ustawia lub czyści szacowany czas zadania (`None`/`0` = usuń szacunek)."""
+    with db_connection(write=True) as conn:
+        ensure_schema(conn)
+        conn.execute("UPDATE tasks SET estimate_min = ?, updated_at = ? WHERE id = ?",
+                     (normalize_estimate_min(estimate_min), now_iso(), task_id))
+    push_database_async()
+
+
 def deadline_card_hidden_today(today=None):
     return get_config("deadline_card_hidden_date", "") == (today or date.today()).isoformat()
 
@@ -1693,16 +1814,61 @@ def update_routine_db(routine_id, title, days=None):
     push_database_async()
 
 
-def toggle_routine_db(routine_id, is_done):
+def toggle_routine_db(routine_id, is_done, day=None):
+    """Zapisuje bieżący stan rutyny ORAZ wpis w historii na dziś (SPRINT 3.1).
+
+    `is_done` nadal jest szybkim stanem bieżącym (resetowanym przy przełomie
+    dnia); `routine_log` trzyma trwały ślad „zrobione/niezrobione” per dzień.
+    """
+    day_str = (day or date.today()).isoformat()
     with db_connection(write=True) as conn:
+        ensure_schema(conn)
         conn.execute("UPDATE routines SET is_done = ? WHERE id = ?", (int(is_done), routine_id))
+        conn.execute(
+            "INSERT INTO routine_log (routine_id, date, done) VALUES (?, ?, ?) "
+            "ON CONFLICT(routine_id, date) DO UPDATE SET done = excluded.done",
+            (routine_id, day_str, int(bool(is_done)))
+        )
     push_database_async()
 
 
 def delete_routine_db(routine_id):
     with db_connection(write=True) as conn:
+        ensure_schema(conn)
         conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
+        # Historia usuniętej rutyny nie ma już właściciela — nie zostawiamy sierot.
+        conn.execute("DELETE FROM routine_log WHERE routine_id = ?", (routine_id,))
     push_database_async()
+
+
+def get_routine_log_map(routine_id=None, since=None):
+    """Historia rutyn jako {routine_id: {date_iso: done}} (SPRINT 3.1).
+
+    `routine_id` zawęża do jednej rutyny, `since` do wpisów od danej daty.
+    Błąd odczytu (np. bardzo stara baza) zwraca pustą mapę, nie wywala widoku.
+    """
+    try:
+        with db_connection() as conn:
+            ensure_schema(conn)
+            query = "SELECT routine_id, date, done FROM routine_log"
+            conditions = []
+            params = []
+            if routine_id is not None:
+                conditions.append("routine_id = ?")
+                params.append(routine_id)
+            if since:
+                conditions.append("date >= ?")
+                params.append(str(since))
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            rows = conn.execute(query, params).fetchall()
+    except Exception as e:
+        LOG.warning("Nie udało się odczytać historii rutyn: %s", e)
+        return {}
+    out = {}
+    for rid, day, done in rows:
+        out.setdefault(rid, {})[day] = int(done or 0)
+    return out
 
 
 def update_subtasks_db(task_id, subtasks_list):
@@ -1725,15 +1891,16 @@ def count_daily_priority_a():
         return res[0] if res else 0
 
 
-def add_task_db(title, is_daily, priority="B", category="Ogólne", deadline=None):
-    """Dodaje zadanie. `deadline` to opcjonalna data ISO (YYYY-MM-DD)."""
+def add_task_db(title, is_daily, priority="B", category="Ogólne", deadline=None, estimate_min=None):
+    """Dodaje zadanie. `deadline` = opcjonalna data ISO, `estimate_min` = minuty."""
     now = now_iso()
     with db_connection(write=True) as conn:
         ensure_schema(conn)
         conn.execute(
             "INSERT INTO tasks (title, is_daily, priority, subtasks, category, deadline, "
-            "created_at, updated_at) VALUES (?, ?, ?, '[]', ?, ?, ?, ?)",
-            (title.strip(), int(is_daily), priority, category, normalize_deadline(deadline), now, now))
+            "created_at, updated_at, estimate_min) VALUES (?, ?, ?, '[]', ?, ?, ?, ?, ?)",
+            (title.strip(), int(is_daily), priority, category, normalize_deadline(deadline), now, now,
+             normalize_estimate_min(estimate_min)))
     push_database_async()
 
 
@@ -1760,10 +1927,12 @@ def set_task_deadline_db(task_id, deadline):
     push_database_async()
 
 
-def update_task_details_db(task_id, title, category=None, deadline=DEADLINE_UNSET):
-    """Zapisuje tytuł, kategorię i termin jednym UPDATE-em (jedno pushowanie).
+def update_task_details_db(task_id, title, category=None, deadline=DEADLINE_UNSET,
+                           estimate=ESTIMATE_UNSET):
+    """Zapisuje tytuł, kategorię, termin i szacunek jednym UPDATE-em (jedno pushowanie).
 
-    `deadline=DEADLINE_UNSET` zostawia termin bez zmian; `None` go czyści.
+    `deadline=DEADLINE_UNSET` / `estimate=ESTIMATE_UNSET` zostawiają pole bez
+    zmian; `None` je czyści.
     """
     title = (title or "").strip()
     new_deadline = None if deadline is DEADLINE_UNSET else normalize_deadline(deadline)
@@ -1779,6 +1948,9 @@ def update_task_details_db(task_id, title, category=None, deadline=DEADLINE_UNSE
         if deadline is not DEADLINE_UNSET:
             conn.execute("UPDATE tasks SET deadline = ?, updated_at = ? WHERE id = ?",
                          (new_deadline, now, task_id))
+        if estimate is not ESTIMATE_UNSET:
+            conn.execute("UPDATE tasks SET estimate_min = ?, updated_at = ? WHERE id = ?",
+                         (normalize_estimate_min(estimate), now, task_id))
     push_database_async()
 
 
@@ -1816,7 +1988,8 @@ def delete_task_db(task_id):
     push_database_async()
 
 
-TASK_ROW_COLUMNS = "id, title, is_daily, is_done, priority, subtasks, category, deadline"
+TASK_ROW_COLUMNS = ("id, title, is_daily, is_done, priority, subtasks, category, deadline, "
+                    "estimate_min")
 
 
 def get_task_row(task_id):
@@ -1851,13 +2024,14 @@ def restore_task_row_db(row):
     """
     if not row or len(row) < 8:
         return False
+    row9 = tuple(row[:9]) if len(row) >= 9 else tuple(row[:8]) + (None,)
     now = now_iso()
     with db_connection(write=True) as conn:
         ensure_schema(conn)
         cursor = conn.execute(
             f"INSERT OR IGNORE INTO tasks ({TASK_ROW_COLUMNS}, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            tuple(row[:8]) + (now, now),
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            row9 + (now, now),
         )
         inserted = cursor.rowcount > 0
     push_database_async()
@@ -2247,6 +2421,85 @@ def get_daily_routines():
     """Rutyny widoczne dziś: bez przypisanych dni (codziennie) albo z dzisiejszym dniem tygodnia."""
     today = datetime.now().weekday()
     return [r for r in get_routines() if not r[3] or today in r[3]]
+
+
+# --- SPRINT 3.1: PASKI I MIĘKKIE SERIE RUTYN (bez poczucia porażki) ---
+def routine_week_view(days, log_map, today=None):
+    """Dane paska tygodnia (poniedziałek–niedziela) dla jednej rutyny.
+
+    Zwraca `(dni, zrobione, zaplanowane)`. `dni` to lista 7 słowników z polami:
+    date, label, scheduled, done, is_today, is_future. `log_map` to mapa
+    {date_iso: done} z historii rutyny (jak z `get_routine_log_map`).
+    """
+    base = today or date.today()
+    monday = base - timedelta(days=base.weekday())
+    days_norm = _normalize_routine_days(days)
+    done_dates = {d for d, value in (log_map or {}).items() if value}
+    entries = []
+    done_count = 0
+    scheduled_count = 0
+    for offset in range(7):
+        current = monday + timedelta(days=offset)
+        iso = current.isoformat()
+        scheduled = (not days_norm) or (current.weekday() in days_norm)
+        done = iso in done_dates
+        if scheduled:
+            scheduled_count += 1
+            if done:
+                done_count += 1
+        entries.append({
+            "date": iso,
+            "label": WEEKDAY_LABELS[offset],
+            "scheduled": scheduled,
+            "done": done,
+            "is_today": current == base,
+            "is_future": current > base,
+        })
+    return entries, done_count, scheduled_count
+
+
+def routine_current_streak(days, log_map, today=None, max_scan=400):
+    """Miękka seria: ile zaplanowanych dni z rzędu rutyna była zrobiona.
+
+    Dzisiejszy dzień, który jeszcze się nie skończył, nie przerywa serii.
+    Dzień, w którym rutyna i tak nie wypada, jest pomijany (nie zrywa serii).
+    Nigdy nie zwraca komunikatu o stracie serii — tylko liczbę.
+    """
+    base = today or date.today()
+    days_norm = _normalize_routine_days(days)
+    done_dates = {d for d, value in (log_map or {}).items() if value}
+    streak = 0
+    current = base
+    for _ in range(max(1, int(max_scan))):
+        scheduled = (not days_norm) or (current.weekday() in days_norm)
+        if scheduled:
+            if current.isoformat() in done_dates:
+                streak += 1
+            elif current != base:
+                break
+        current -= timedelta(days=1)
+    return streak
+
+
+def build_routine_week_stripe(entries):
+    """Mały pasek 7 dni dla rutyny (zielone = zrobione, szare = zaplanowane)."""
+    dots = []
+    for entry in entries:
+        if entry["done"]:
+            color, fill = COLOR_SUCCESS, COLOR_SUCCESS
+        elif entry["scheduled"]:
+            color = COLOR_TEXT_SECONDARY if entry["is_future"] else COLOR_PRIO_A
+            fill = COLOR_BG_SURFACE
+        else:
+            color, fill = COLOR_BG_BORDER, COLOR_BG_SURFACE
+        dots.append(ft.Container(
+            content=ft.Text(entry["label"], size=9,
+                            color=COLOR_TEXT_PRIMARY if entry["is_today"] else COLOR_TEXT_SECONDARY),
+            width=20, height=20, border_radius=6, alignment=ft.Alignment(0, 0),
+            bgcolor=fill, border=ft.Border.all(1, color),
+            tooltip=f"{entry['label']}: {'zrobione' if entry['done'] else 'zaplanowane' if entry['scheduled'] else 'nie zaplanowano'}",
+        ))
+    return ft.Row(dots, spacing=4, tight=True)
 
 
 def build_routine_day_chips(selected, on_toggle):
@@ -2929,8 +3182,60 @@ def main(page: ft.Page):
         ], tight=True, spacing=4)
         return column, refresh_label
 
+    def make_estimate_editor(state):
+        """Sekcja „Szacowany czas (opcjonalnie)” ze skrótami 5/15/30/60 i własnym.
+
+        `state` to słownik z kluczem „value” (int minut albo None). Zwraca parę
+        (kontrolka, ustaw_wartość). Ustawianie odświeża też własne pole, więc
+        wczytanie szacunku z bazy pokazuje go w formularzu.
+        """
+        label = ft.Text("", size=12, color=COLOR_TEXT_SECONDARY)
+        custom = ft.TextField(
+            label="Własne (min)", width=130, dense=True,
+            bgcolor=COLOR_BG_SURFACE, border_color=COLOR_BG_BORDER,
+        )
+
+        def refresh_label():
+            value = normalize_estimate_min(state.get("value"))
+            if not value:
+                label.value = "Bez szacunku — zadanie nie wchodzi w sumę dnia."
+                label.color = COLOR_TEXT_SECONDARY
+            else:
+                label.value = f"Szacowany czas: {format_duration_pl(value)}"
+                label.color = COLOR_TEXT_PRIMARY
+
+        def set_value(value):
+            state["value"] = normalize_estimate_min(value)
+            custom.value = "" if state["value"] is None else str(state["value"])
+            refresh_label()
+
+        def on_custom_change(e=None):
+            # Nie nadpisujemy pola tekstowego — pozwalamy dopisać „4” -> „45”.
+            state["value"] = normalize_estimate_min(custom.value)
+            refresh_label()
+
+        custom.on_change = on_custom_change
+        custom.on_submit = on_custom_change
+
+        presets = [("5 min", 5), ("15 min", 15), ("30 min", 30), ("1 h", 60)]
+        preset_row = ft.Row(
+            [ft.TextButton(text, on_click=lambda e, v=v: set_value(v)) for text, v in presets]
+            + [ft.TextButton("Bez szacunku", on_click=lambda e: set_value(None))],
+            wrap=True, spacing=4,
+        )
+        refresh_label()
+        column = ft.Column([
+            ft.Text("Szacowany czas (opcjonalnie)", size=13, color=COLOR_TEXT_PRIMARY),
+            preset_row,
+            ft.Row([custom], spacing=4),
+            label,
+        ], tight=True, spacing=4)
+        return column, set_value
+
     new_deadline_state = {"value": None}
     new_deadline_editor, refresh_new_deadline = make_deadline_editor(new_deadline_state)
+    new_estimate_state = {"value": None}
+    new_estimate_editor, set_new_estimate = make_estimate_editor(new_estimate_state)
 
     def save_master_task(e=None):
         if master_title_field.value.strip():
@@ -2940,19 +3245,21 @@ def main(page: ft.Page):
                 is_daily=False,
                 priority=selected_new_prio,
                 category=custom_category or master_category_dropdown.value or "Ogólne",
-                deadline=new_deadline_state.get("value")
+                deadline=new_deadline_state.get("value"),
+                estimate_min=new_estimate_state.get("value")
             )
             master_title_field.value = ""
             new_category_field.value = ""
             new_deadline_state["value"] = None
             refresh_new_deadline()
+            set_new_estimate(None)
             master_dialog.open = False
             status_text.value = "✓ Dodano"
             refresh_view()
 
     master_dialog = ft.AlertDialog(title=ft.Text("➕ Nowy projekt / zadanie"), content=ft.Column(
         [master_title_field, master_category_dropdown, new_category_field,
-         new_deadline_editor,
+         new_deadline_editor, new_estimate_editor,
          ft.Text("Priorytet:", size=13), prio_select_row], tight=True, spacing=10),
                                    actions=[ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
                                             ft.Button("Dodaj", on_click=save_master_task)])
@@ -2998,6 +3305,8 @@ def main(page: ft.Page):
     editing_task_id = None
     edit_deadline_state = {"value": None}
     edit_deadline_editor, refresh_edit_deadline = make_deadline_editor(edit_deadline_state)
+    edit_estimate_state = {"value": None}
+    edit_estimate_editor, set_edit_estimate = make_estimate_editor(edit_estimate_state)
 
     def open_edit_task_dialog(task_id, current_title, current_category="Ogólne"):
         nonlocal editing_task_id
@@ -3011,6 +3320,7 @@ def main(page: ft.Page):
         edit_category_dropdown.value = cat
         edit_deadline_state["value"] = get_task_deadline(task_id)
         refresh_edit_deadline()
+        set_edit_estimate(get_task_estimate(task_id))
         edit_task_dialog.open = True
         page.update()
 
@@ -3020,7 +3330,8 @@ def main(page: ft.Page):
         cat = edit_category_dropdown.value or "Ogólne"
         if editing_task_id and val:
             update_task_details_db(editing_task_id, val, category=cat,
-                                   deadline=edit_deadline_state.get("value"))
+                                   deadline=edit_deadline_state.get("value"),
+                                   estimate=edit_estimate_state.get("value"))
             edit_task_dialog.open = False
             status_text.value = "✓ Zaktualizowano zadanie"
             warning_text.value = ""
@@ -3028,7 +3339,8 @@ def main(page: ft.Page):
 
     edit_task_dialog = ft.AlertDialog(
         title=ft.Text("✏️ Edytuj zadanie"),
-        content=ft.Column([edit_task_field, edit_category_dropdown, edit_deadline_editor],
+        content=ft.Column([edit_task_field, edit_category_dropdown, edit_deadline_editor,
+                           edit_estimate_editor],
                           tight=True, spacing=10),
         actions=[
             ft.TextButton("Anuluj", on_click=lambda e: close_dialogs()),
@@ -3964,22 +4276,40 @@ def main(page: ft.Page):
         if current_view == "settings":
             title_text.value = f"Ustawienia (v{current_ver})"
             rout_db = get_routines()
-            rout_list = ft.Column([
-                ft.Container(
-                    bgcolor=COLOR_BG_SURFACE, padding=ft.Padding.symmetric(horizontal=12, vertical=8), border_radius=8,
-                    content=ft.Row([
-                        ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=16, color=COLOR_SUCCESS),
-                        ft.Text(r[1], expand=True, size=13, color=COLOR_TEXT_PRIMARY),
-                        ft.Text(routine_days_label(r[3]), size=11, color=COLOR_PRIO_C, weight=ft.FontWeight.W_500,
-                                tooltip=", ".join(WEEKDAY_FULL[d] for d in r[3])) if r[3] else ft.Text("Codziennie", size=11, color=COLOR_TEXT_SECONDARY),
-                        ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=17, icon_color=COLOR_TEXT_SECONDARY,
-                                      tooltip="Edytuj rutynę",
-                                      on_click=lambda e, rid=r[0], rtitle=r[1], rdays=r[3]: open_edit_routine_dialog(rid, rtitle, rdays)),
-                        ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=18, icon_color=COLOR_PRIO_A, tooltip="Usuń rutynę",
-                                      on_click=lambda e, rid=r[0]: (delete_routine_db(rid), refresh_view()))
-                    ])
-                ) for r in rout_db
-            ], spacing=6)
+            routine_log_all = get_routine_log_map()
+            rout_rows = []
+            for r in rout_db:
+                rid, rname, rdays = r[0], r[1], r[3]
+                week_entries, week_done, week_sched = routine_week_view(rdays, routine_log_all.get(rid, {}))
+                streak = routine_current_streak(rdays, routine_log_all.get(rid, {}))
+                history_bits = [f"w tym tygodniu: {week_done}/{week_sched}"]
+                if streak >= 2:
+                    history_bits.append(f"seria: {streak} dni z rzędu")
+                rout_rows.append(ft.Container(
+                    bgcolor=COLOR_BG_SURFACE, padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                    border_radius=8,
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=16, color=COLOR_SUCCESS),
+                            ft.Text(rname, expand=True, size=13, color=COLOR_TEXT_PRIMARY),
+                            ft.Text(routine_days_label(rdays), size=11, color=COLOR_PRIO_C,
+                                    weight=ft.FontWeight.W_500,
+                                    tooltip=", ".join(WEEKDAY_FULL[d] for d in rdays)) if rdays else ft.Text(
+                                "Codziennie", size=11, color=COLOR_TEXT_SECONDARY),
+                            ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=17, icon_color=COLOR_TEXT_SECONDARY,
+                                          tooltip="Edytuj rutynę",
+                                          on_click=lambda e, rid=rid, rtitle=rname, rdays=rdays: open_edit_routine_dialog(rid, rtitle, rdays)),
+                            ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=18, icon_color=COLOR_PRIO_A, tooltip="Usuń rutynę",
+                                          on_click=lambda e, rid=rid: (delete_routine_db(rid), refresh_view()))
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Row([
+                            ft.Text("Historia:", size=10, color=COLOR_TEXT_SECONDARY),
+                            build_routine_week_stripe(week_entries),
+                            ft.Text(" · ".join(history_bits), size=10, color=COLOR_TEXT_SECONDARY),
+                        ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ], spacing=4)
+                ))
+            rout_list = ft.Column(rout_rows, spacing=6)
 
             card_routines = ft.Container(
                 bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
@@ -4390,6 +4720,10 @@ def main(page: ft.Page):
         # Rutyny przypisane do konkretnych dni pokazują się na Daily tylko tego dnia
         # (rutyna bez dni = codzienna). Na Daily liczymy też postęp tylko z nich.
         all_routines = get_daily_routines() if is_daily_mode else get_routines()
+        # SPRINT 3.4: suma szacunków dnia (jedna liczba, bez wykresów).
+        est_total, est_missing = (0, 0)
+        if is_daily_mode:
+            est_total, est_missing = sum_estimates(get_estimates_map(), all_view_tasks)
 
         if is_daily_mode:
             prog_val = calculate_progress_logic(all_view_tasks, all_routines, active_subtask_idx_map)
@@ -5239,27 +5573,35 @@ def main(page: ft.Page):
                 ], spacing=6)
             )
             elements.append(timer_card)
+            progress_card_children = [
+                ft.Row([
+                    ft.Row([
+                        ft.Icon(ft.Icons.TRENDING_UP_ROUNDED, size=16, color=COLOR_SUCCESS),
+                        ft.Text("Postęp dnia", size=13, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY),
+                    ], spacing=6),
+                    ft.Container(expand=True),
+                    ft.Container(
+                        content=progress_text,
+                        bgcolor="#10b98122",
+                        padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+                        border_radius=8
+                    )
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                progress_bar,
+            ]
+            if est_total:
+                estimate_bits = [f"Zaplanowane: ~{format_duration_pl(est_total)}"]
+                if est_missing:
+                    estimate_bits.append(f"bez szacunku: {est_missing}")
+                progress_card_children.append(
+                    ft.Text(" · ".join(estimate_bits), size=11, color=COLOR_TEXT_SECONDARY)
+                )
             progress_card = ft.Container(
                 bgcolor=COLOR_BG_CARD,
                 border=ft.Border.all(1, COLOR_BG_BORDER),
                 border_radius=12,
                 padding=12,
-                content=ft.Column([
-                    ft.Row([
-                        ft.Row([
-                            ft.Icon(ft.Icons.TRENDING_UP_ROUNDED, size=16, color=COLOR_SUCCESS),
-                            ft.Text("Postęp dnia", size=13, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY),
-                        ], spacing=6),
-                        ft.Container(expand=True),
-                        ft.Container(
-                            content=progress_text,
-                            bgcolor="#10b98122",
-                            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
-                            border_radius=8
-                        )
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    progress_bar,
-                ], spacing=8)
+                content=ft.Column(progress_card_children, spacing=8)
             )
             elements.append(progress_card)
             if all_routines:

@@ -2054,5 +2054,256 @@ def test_ui_master_stale_filter_pill():
     assert "Duch" in texts and "Świeże" not in texts
 
 
+# --- 16. SPRINT 3.1: HISTORIA RUTYN I MIĘKKIE SERIE ---
+def test_routine_log_records_history_and_survives_end_of_day():
+    main.add_routine_db("Leki")
+    rid = main.get_routines()[0][0]
+    day = date(2026, 10, 27)
+    main.toggle_routine_db(rid, True, day=day)
+    assert main.get_routine_log_map()[rid][day.isoformat()] == 1
+
+    # Odznaczenie tego samego dnia nadpisuje wpis (bez duplikatu).
+    main.toggle_routine_db(rid, False, day=day)
+    assert main.get_routine_log_map()[rid][day.isoformat()] == 0
+
+    main.toggle_routine_db(rid, True, day=day)
+    main.end_of_day_db()  # stary reset: is_done -> 0, historia musi zostać
+    assert main.get_routines()[0][2] == 0
+    assert main.get_routine_log_map()[rid][day.isoformat()] == 1
+
+
+def test_routine_history_survives_day_rollover():
+    main.add_routine_db("Woda")
+    rid = main.get_routines()[0][0]
+    main.toggle_routine_db(rid, True)  # dziś
+    main.set_config("last_reset_date", "2020-01-01")
+
+    main.apply_day_rollover()
+
+    assert main.get_routines()[0][2] == 0
+    assert main.get_routine_log_map()[rid][date.today().isoformat()] == 1
+
+
+def test_routine_week_view_and_soft_streak():
+    today = date(2026, 10, 28)  # środa
+    days, done_count, scheduled = main.routine_week_view(
+        [], {"2026-10-26": 1, "2026-10-27": 1, "2026-10-28": 1}, today=today)
+    assert scheduled == 7 and done_count == 3
+    assert days[0]["label"] == "Pn" and days[6]["label"] == "Nd"
+    assert days[2]["is_today"] is True
+    assert days[0]["done"] is True and days[3]["done"] is False
+
+    # Trzy dni z rzędu (Pn–Śr), potem przerwa -> seria = 3.
+    assert main.routine_current_streak([], {"2026-10-26": 1, "2026-10-27": 1, "2026-10-28": 1},
+                                       today=today) == 3
+
+    # Dzisiejszy dzień jeszcze się nie skończył i nie zrywa serii.
+    assert main.routine_current_streak(
+        [], {"2026-10-26": 1, "2026-10-27": 1}, today=today) == 2
+
+    # Dzień, w którym rutyna nie wypada, nie przerywa serii (Pn, Śr; przerwa Cz).
+    assert main.routine_current_streak(
+        [0, 2], {"2026-10-26": 1, "2026-10-28": 1}, today=date(2026, 10, 29)) == 2
+
+    # Rutyna Pn/Śr: zaplanowane 2 dni w tygodniu.
+    week, done_w, sched_w = main.routine_week_view([0, 2], {"2026-10-26": 1}, today=today)
+    assert sched_w == 2 and done_w == 1
+    assert week[3]["scheduled"] is False
+
+
+def test_routine_log_migration_old_db(tmp_path, monkeypatch):
+    import app_logic
+
+    old_db = str(tmp_path / "old_routine_log.db")
+    _make_old_schema_db(old_db)
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+    main.init_db()
+
+    rid = main.get_routines()[0][0]
+    assert main.get_routine_log_map() == {}
+    main.toggle_routine_db(rid, True, day=date(2026, 10, 20))
+    assert main.get_routine_log_map()[rid]["2026-10-20"] == 1
+
+    conn = sqlite3.connect(old_db)
+    try:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    finally:
+        conn.close()
+    assert "routine_log" in tables
+
+
+def test_routine_log_json_roundtrip(tmp_path, monkeypatch):
+    import app_logic
+
+    main.add_routine_db("Meds", days=[0, 2])
+    rid = main.get_routines()[0][0]
+    main.toggle_routine_db(rid, True, day=date(2026, 10, 26))
+    main.toggle_routine_db(rid, True, day=date(2026, 10, 28))
+
+    exported = main.export_database_to_json_dict()
+    assert {e["date"] for e in exported["routine_log"]} == {"2026-10-26", "2026-10-28"}
+
+    new_db = str(tmp_path / "import_routine_log.db")
+    monkeypatch.setattr(app_logic, "LOCAL_DB", new_db)
+    monkeypatch.setattr(main, "LOCAL_DB", new_db)
+    main.init_db()
+    main.import_database_from_json_dict(exported, replace_existing=True)
+
+    new_rid = main.get_routines()[0][0]
+    log = main.get_routine_log_map(new_rid).get(new_rid, {})
+    assert log["2026-10-26"] == 1 and log["2026-10-28"] == 1
+
+
+def test_settings_routine_history_ui():
+    main.add_routine_db("Leki")
+    rid = main.get_routines()[0][0]
+    main.toggle_routine_db(rid, True)
+
+    page = DummyPage(width=950)
+    main.main(page)
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    sidebar_col.controls[-1].on_click(None)  # Ustawienia
+
+    content_col = root.content.controls[2].content
+    assert _control_contains_text(content_col, "w tym tygodniu: 1/7")
+
+
+# --- 17. SPRINT 3.4: SZACOWANY CZAS (estimate_min) ---
+def test_estimate_normalization_and_formatting():
+    assert main.normalize_estimate_min("45") == 45
+    assert main.normalize_estimate_min(45.0) == 45
+    assert main.normalize_estimate_min(" 30 ") == 30
+    assert main.normalize_estimate_min(0) is None
+    assert main.normalize_estimate_min(-5) is None
+    assert main.normalize_estimate_min("abc") is None
+    assert main.normalize_estimate_min(None) is None
+    assert main.normalize_estimate_min(True) is None
+
+    assert main.format_duration_pl(100) == "1 h 40 min"
+    assert main.format_duration_pl(60) == "1 h"
+    assert main.format_duration_pl(45) == "45 min"
+    assert main.format_duration_pl(0) == ""
+
+    total, missing = main.sum_estimates({1: 30, 2: None, 3: 0}, [(1,), (2,), (3,)])
+    assert total == 30 and missing == 2
+
+
+def test_task_estimate_db_crud():
+    main.add_task_db("Szacowane", is_daily=1, priority="A", estimate_min=30)
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+    assert main.get_task_estimate(task_id) == 30
+
+    main.set_task_estimate_db(task_id, 90)
+    assert main.get_task_estimate(task_id) == 90
+
+    # Sentinel nie rusza szacunku, konkretna wartość go nadpisuje.
+    main.update_task_details_db(task_id, "Szacowane", estimate=main.ESTIMATE_UNSET)
+    assert main.get_task_estimate(task_id) == 90
+    main.update_task_details_db(task_id, "Szacowane", estimate=15)
+    assert main.get_task_estimate(task_id) == 15
+
+    main.set_task_estimate_db(task_id, None)
+    assert main.get_task_estimate(task_id) is None
+
+
+def test_estimate_migration_old_db(tmp_path, monkeypatch):
+    import app_logic
+
+    old_db = str(tmp_path / "old_estimate.db")
+    conn = sqlite3.connect(old_db)
+    conn.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+                 "is_daily INTEGER DEFAULT 0, is_done INTEGER DEFAULT 0, priority TEXT DEFAULT 'B', "
+                 "subtasks TEXT DEFAULT '[]', category TEXT DEFAULT 'Ogólne', deadline TEXT, "
+                 "created_at TEXT, updated_at TEXT)")
+    conn.execute("CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+                 "is_done INTEGER DEFAULT 0, routine_days TEXT DEFAULT '[]')")
+    conn.execute("CREATE TABLE completed_archive (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, "
+                 "priority TEXT, completed_at TEXT)")
+    conn.execute("INSERT INTO tasks (title) VALUES ('Stare bez szacunku')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+    assert main.ensure_schema_upgrade(old_db) is True
+
+    with sqlite3.connect(old_db) as check:
+        columns = [r[1] for r in check.execute("PRAGMA table_info(tasks)").fetchall()]
+    assert "estimate_min" in columns
+    assert main.get_task_estimate(main.get_tasks(is_daily_view=False)[0][0]) is None
+
+
+def test_estimate_json_roundtrip(tmp_path, monkeypatch):
+    import app_logic
+
+    main.add_task_db("Z szacunkiem", is_daily=0, priority="B", estimate_min=75)
+    exported = main.export_database_to_json_dict()
+    task = [t for t in exported["tasks"] if t["title"] == "Z szacunkiem"][0]
+    assert task["estimate_min"] == 75
+    # Stary backup bez szacunku importuje się i nie wysypuje.
+    assert main.normalize_estimate_min(task.get("estimate_min")) == 75
+
+    new_db = str(tmp_path / "import_estimate.db")
+    monkeypatch.setattr(app_logic, "LOCAL_DB", new_db)
+    monkeypatch.setattr(main, "LOCAL_DB", new_db)
+    main.init_db()
+    main.import_database_from_json_dict(exported, replace_existing=True)
+    new_id = main.get_tasks(is_daily_view=False)[0][0]
+    assert main.get_task_estimate(new_id) == 75
+
+
+def test_undo_restores_estimate():
+    main.add_task_db("Do cofnięcia", is_daily=1, priority="A", estimate_min=45)
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+
+    row = main.delete_task_with_undo_db(task_id)
+    assert main.get_task_estimate(task_id) is None
+    assert main.restore_task_row_db(row) is True
+    assert main.get_task_estimate(task_id) == 45
+
+
+def test_daily_estimate_summary_ui():
+    main.add_task_db("Krótkie", is_daily=1, priority="B", estimate_min=60)
+    main.add_task_db("Średnie", is_daily=1, priority="B", estimate_min=30)
+    main.add_task_db("Bez szacunku", is_daily=1, priority="C")
+
+    page = DummyPage(width=950)
+    main.main(page)
+    root = page.controls[0].content
+    content_col = root.content.controls[2].content
+
+    assert _control_contains_text(content_col, "Zaplanowane: ~1 h 30 min")
+    assert _control_contains_text(content_col, "bez szacunku: 1")
+
+
+def test_ui_edit_dialog_sets_estimate():
+    main.add_task_db("Z szacunkiem", is_daily=1, priority="B", estimate_min=15)
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+
+    page = DummyPage(width=950)
+    main.main(page)
+    root = page.controls[0].content
+    content_col = root.content.controls[2].content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    # Daily bez podkroków: prio, checkbox, tytuł, edycja...
+    tasks_col.controls[0].content.controls[3].on_click(None)
+
+    dialog = page.overlay[3]
+    assert dialog.open is True
+    # Kontrakt kolejności: 0 tytuł, 1 kategoria, 2 termin, 3 szacunek.
+    assert isinstance(dialog.content.controls[2], ft.Column)
+    assert isinstance(dialog.content.controls[3], ft.Column)
+
+    btn_30 = [c for c in _iter_controls(dialog.content.controls[3])
+              if getattr(c, "text", None) == "30 min"
+              or getattr(c, "content", None) == "30 min"][0]
+    btn_30.on_click(None)
+    dialog.actions[1].on_click(None)
+    assert main.get_task_estimate(task_id) == 30
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
