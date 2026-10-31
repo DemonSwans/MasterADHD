@@ -1,3 +1,19 @@
+"""Master ADHD — logika aplikacji (dane + synchronizacja + OTA + interfejs Flet).
+
+Jeden moduł, czytany od góry do dołu:
+
+  1. Ścieżki i stałe (`APP_DIR`, `LOCAL_DB`, `CONFIG_DB`, limity, klucze configu).
+  2. Wersje i OTA (`get_local_version`, `install_ota_code`, aktywacja i rollback).
+  3. Połączenia z SQLite (`db_connection`) oraz integralność i snapshoty bazy.
+  4. Historia zmian i synchronizacja (Gist / HA / folder) z panelem konfliktów.
+  5. Schemat i operacje na danych (zadania, podkroki, rutyny, archiwum).
+  6. `main(page)` — cały interfejs Flet (widoki Daily / Master / Dziennik / Ustawienia).
+
+Konwencje: każde zapisywanie danych kończy się `push_database_async()`, każda
+podmiana pliku `LOCAL_DB` — `ensure_schema_upgrade()`, a wszystko opcjonalne
+(brak sieci, uprawnień, wsparcia platformy) degraduje się łagodnie i tylko loguje.
+"""
+
 import base64
 import contextlib
 import hashlib
@@ -26,6 +42,10 @@ GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/maste
 
 # --- PRYWATNY FOLDER WEWNĘTRZNY APLIKACJI ---
 def get_app_dir():
+    """Folder danych aplikacji: `FLET_APP_STORAGE_DATA/.master_adhd_data` (Android)
+    albo `~/.master_adhd_data` (PC). Tworzy go przy pierwszym użyciu, a gdy to się
+    nie uda — zwraca "." (łagodna degradacja: lepiej zapisać obok niż nie wystartować).
+    """
     base = os.environ.get("FLET_APP_STORAGE_DATA") or os.path.expanduser("~")
     app_dir = os.path.join(base, ".master_adhd_data")
     try:
@@ -77,6 +97,12 @@ DB_WRITE_LOCK = threading.RLock()
 
 # --- LOGOWANIE DO PLIKU (na telefonie print() przepada) ---
 def _setup_logging():
+    """Logger `master_adhd` z rotacją pliku (1 MB × 3 kopie) w folderze danych.
+
+    Na telefonie `print()` ginie, więc log plikowy jest jedynym śladem zdarzeń.
+    Kolejne wywołania zwracają już skonfigurowany logger (flaga `_master_configured`).
+    Brak możliwości zapisu pliku nie przerywa startu — logowanie degraduje się cicho.
+    """
     logger = logging.getLogger("master_adhd")
     if getattr(logger, "_master_configured", False):
         return logger
@@ -111,6 +137,11 @@ def export_logs():
 
 
 def is_newer_version(remote_ver: str, local_ver: str) -> bool:
+    """Czy `remote_ver` jest nowsze od `local_ver` (porównanie segmentów liczbowych).
+
+    Numery, których nie da się rozbić na inty (np. „1.7.0-dev”), porównujemy
+    tekstowo — byle nie uznać ich po cichu za równe.
+    """
     try:
         r_parts = [int(x) for x in remote_ver.strip().split(".")]
         l_parts = [int(x) for x in local_ver.strip().split(".")]
@@ -121,6 +152,7 @@ def is_newer_version(remote_ver: str, local_ver: str) -> bool:
 
 # --- ODCZYT WERSJI ---
 def _read_version_file(path):
+    """Treść pliku z numerem wersji (bez białych znaków) albo "" gdy brak/błąd."""
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
@@ -232,12 +264,14 @@ def _touch_db_change():
 
 # --- KONFIGURACJA LOKALNA ---
 def init_config_db():
+    """Tworzy bazę konfiguracji (`app_config.db`) i tabelę `config` (key → value)."""
     with db_connection(CONFIG_DB) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)")
 
 
 def get_config(key, default=""):
+    """Wartość z tabeli `config` jako string; brak klucza lub błąd odczytu → `default`."""
     try:
         with db_connection(CONFIG_DB) as conn:
             res = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
@@ -247,6 +281,7 @@ def get_config(key, default=""):
 
 
 def set_config(key, value):
+    """Zapisuje `str(value)` w `config` pod kluczem `key` (INSERT OR REPLACE)."""
     with db_connection(CONFIG_DB) as conn:
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
 
@@ -336,6 +371,7 @@ def backup_database(dest_path, source_path=None):
 
 
 def get_snapshot_dir():
+    """Folder `snapshots/` obok `LOCAL_DB` (tworzony, gdy nie istnieje)."""
     base = os.path.dirname(os.path.abspath(LOCAL_DB)) or APP_DIR
     path = os.path.join(base, "snapshots")
     os.makedirs(path, exist_ok=True)
@@ -359,6 +395,7 @@ def list_snapshots():
 
 
 def prune_snapshots(keep=SNAPSHOT_LIMIT):
+    """Zostawia `keep` najnowszych snapshotów, starsze usuwa (rotacja, limit 10)."""
     try:
         snaps = list_snapshots()
         for old in snaps[keep:]:
@@ -406,6 +443,7 @@ def restore_pre_sync_backup(snapshot_path=None):
 
 
 def restore_snapshot_file(path):
+    """Alias `restore_pre_sync_backup(path)` — przywraca wskazany snapshot bazy."""
     return restore_pre_sync_backup(path)
 
 
@@ -436,10 +474,12 @@ def ensure_db_health():
 
 # --- SYNCHRONIZACJA (Chmura Gist / HA / Folder) ---
 def is_valid_sqlite(file_data):
+    """Czy bajty zaczynają się od nagłówka SQLite (szybka kontrola, bez otwierania bazy)."""
     return bool(file_data) and file_data.startswith(b"SQLite format 3")
 
 
 def _read_remote_bytes(path):
+    """Bajty pliku zdalnej bazy — tryb synchronizacji przez folder (`sync_mode="folder"`)."""
     with open(path, "rb") as f:
         return f.read()
 
@@ -564,6 +604,7 @@ def set_sync_conflict_state(remote_hash, local_hash="", label=""):
 
 
 def clear_sync_conflict():
+    """Kasuje oczekujący konflikt synchronizacji (użytkownik już wybrał wersję)."""
     set_config(SYNC_CONFLICT_KEY, "")
 
 
@@ -957,15 +998,18 @@ _SYNC_STATUS_CALLBACK = None
 
 
 def register_sync_status_callback(cb):
+    """Rejestruje odbiorcę zmian stanu synchronizacji (badge w UI)."""
     global _SYNC_STATUS_CALLBACK
     _SYNC_STATUS_CALLBACK = cb
 
 
 def get_sync_state():
+    """Kopia aktualnego stanu synchronizacji (`status`, `message`, `updated_at`)."""
     return dict(SYNC_STATE)
 
 
 def set_sync_status(status, message=""):
+    """Ustawia stan synchronizacji i powiadamia callback UI (jego błąd ignorujemy)."""
     SYNC_STATE["status"] = status
     SYNC_STATE["message"] = message
     SYNC_STATE["updated_at"] = datetime.now()
@@ -978,6 +1022,7 @@ def set_sync_status(status, message=""):
 
 
 def _ensure_sync_worker():
+    """Startuje (raz) daemoniczny wątek synchronizacji, jeśli jeszcze nie działa."""
     global _SYNC_THREAD
     with _SYNC_THREAD_LOCK:
         if _SYNC_THREAD is not None and _SYNC_THREAD.is_alive():
@@ -987,6 +1032,13 @@ def _ensure_sync_worker():
 
 
 def _sync_worker():
+    """Wątek synchronizacji: czeka na zgłoszenie, odczekuje debounce, potem push.
+
+    Debounce 1,5 s (`SYNC_DEBOUNCE_SECONDS`) zbiera serię zmian w jeden zapis,
+    więc chmura nie jest bombardowana przy każdym kliknięciu. Pętla żyje przez
+    cały czas działania aplikacji; nowe zgłoszenie w trakcie zapisu zostaje
+    „pending” i zostanie obsłużone w kolejnym obrocie.
+    """
     while True:
         _SYNC_EVENT.wait()
         # Debounce: czekamy aż użytkownik przestanie klikać (mniej zapisów, mniej limitów API).
@@ -1130,6 +1182,7 @@ def install_ota_code(new_code, remote_ver):
 
 
 def _restore_version_files(version):
+    """Przywraca numer `version` we wszystkich plikach wersji (rollback po OTA)."""
     if not version:
         return
     for path in _version_files():
@@ -1275,6 +1328,14 @@ def ensure_schema_upgrade(db_path=None):
 
 
 def init_db():
+    """Tworzy schemat `tasks.db`: tabele `tasks`, `routines`, `routine_log`,
+    `completed_archive` i domyka migracje kolumn przez `ensure_schema()`.
+
+    Woła też `init_config_db()` i `ensure_db_health()` (uszkodzoną bazę odkłada
+    i przywraca snapshot). **Nie rusza** `db_last_change` (`write=False`): samo
+    utworzenie schematu nie jest zmianą danych, a przesunięcie znacznika
+    blokowałoby pull z chmury tuż po starcie aplikacji.
+    """
     init_config_db()
     ok, msg = ensure_db_health()
     if not ok:
@@ -1403,6 +1464,7 @@ def export_database_to_json_file():
 
 
 def latest_json_backup():
+    """Najnowszy plik `master_adhd_backup_*.json` z folderu danych albo ""."""
     try:
         files = [f for f in os.listdir(APP_DIR) if f.startswith("master_adhd_backup_") and f.endswith(".json")]
         if not files:
@@ -1463,6 +1525,7 @@ def import_database_from_json_dict(data, replace_existing=False):
 
 
 def import_database_from_json_file(path, replace_existing=False):
+    """Import danych z pliku JSON; brak pliku lub błąd odczytu → (False, komunikat)."""
     if not path or not os.path.exists(path):
         return False, "Nie znaleziono pliku JSON"
     try:
@@ -1589,6 +1652,12 @@ def format_mmss(seconds):
 
 
 def _select_tasks(conn, is_daily_view):
+    """Wiersze zadań w kolejności kontraktu `get_tasks()`: id, title, is_daily,
+    is_done, priority, subtasks (lista), category, deadline.
+
+    Pozycje 0–7 są kontraktem UI i testów — nowe kolumny dodawaj na końcu listy
+    albo osobnym getterem (tak zrobiono z `estimate_min` i znacznikami czasu).
+    """
     columns = "id, title, is_daily, is_done, priority, subtasks, category, deadline"
     if is_daily_view:
         rows = conn.execute(
@@ -1611,6 +1680,11 @@ def _select_tasks(conn, is_daily_view):
 
 
 def get_tasks(is_daily_view=True):
+    """Zadania: `True` → tylko Daily, `False` → wszystkie (Master).
+
+    Przy `no such column` (baza ze snapshotu/chmury sprzed migracji) domyka
+    schemat i czyta ponownie, żeby widok nie padał na starszym pliku.
+    """
     try:
         with db_connection() as conn:
             return _select_tasks(conn, is_daily_view)
@@ -1941,14 +2015,17 @@ def set_task_estimate_db(task_id, estimate_min):
 
 
 def deadline_card_hidden_today(today=None):
+    """Czy użytkownik ukrył dziś kartę „Nadchodzące terminy” na Daily."""
     return get_config("deadline_card_hidden_date", "") == (today or date.today()).isoformat()
 
 
 def hide_deadline_card_today(today=None):
+    """Ukrywa kartę terminów do końca dnia (config `deadline_card_hidden_date`)."""
     set_config("deadline_card_hidden_date", (today or date.today()).isoformat())
 
 
 def deadline_reminder_days():
+    """Ile dni wprzód pokazywać terminy (config `deadline_reminder_days`, min. 1, domyślnie 7)."""
     try:
         return max(1, int(get_config("deadline_reminder_days", "7") or 7))
     except (TypeError, ValueError):
@@ -1966,11 +2043,18 @@ def should_show_deadline_card(today=None, within_days=None):
 
 
 def _select_routines(conn):
+    """Rutyny jako `(id, title, is_done, days)`; `days` znormalizowane do listy intów 0–6."""
     rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines ORDER BY id").fetchall()
     return [(r[0], r[1], r[2], _normalize_routine_days(r[3])) for r in rows]
 
 
 def get_routines():
+    """Rutyny z dniami tygodnia (0 = poniedziałek … 6 = niedziela; `[]` = codziennie).
+
+    Łagodna degradacja: przy braku kolumny `routine_days` domyka schemat i próbuje
+    raz jeszcze, a gdy to nie pomoże — czyta rutyny bez dni, żeby widok nigdy nie
+    padł na bazie sprzed migracji.
+    """
     try:
         with db_connection() as conn:
             return _select_routines(conn)
@@ -2036,6 +2120,7 @@ def toggle_routine_db(routine_id, is_done, day=None):
 
 
 def delete_routine_db(routine_id):
+    """Usuwa rutynę wraz z jej historią w `routine_log` (nie zostawia sierot)."""
     with db_connection(write=True) as conn:
         ensure_schema(conn)
         conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
@@ -2075,6 +2160,7 @@ def get_routine_log_map(routine_id=None, since=None):
 
 
 def update_subtasks_db(task_id, subtasks_list):
+    """Podmienia całą listę podkroków zadania (JSON) i podnosi `updated_at`."""
     with db_connection(write=True) as conn:
         conn.execute("UPDATE tasks SET subtasks = ?, updated_at = ? WHERE id = ?",
                      (json.dumps(subtasks_list, ensure_ascii=False), now_iso(), task_id))
@@ -2082,12 +2168,14 @@ def update_subtasks_db(task_id, subtasks_list):
 
 
 def get_task_priority(task_id):
+    """Priorytet zadania ("A"/"B"/"C"); brak zadania → "B"."""
     with db_connection() as conn:
         res = conn.execute("SELECT priority FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return res[0] if res else "B"
 
 
 def count_daily_priority_a():
+    """Liczba nieukończonych zadań „A” na Daily (do limitu „A” z Ustawień)."""
     with db_connection() as conn:
         res = conn.execute(
             "SELECT COUNT(*) FROM tasks WHERE is_daily = 1 AND priority = 'A' AND is_done = 0").fetchone()
@@ -2158,6 +2246,7 @@ def update_task_details_db(task_id, title, category=None, deadline=DEADLINE_UNSE
 
 
 def update_task_category_db(task_id, category):
+    """Ustawia kategorię zadania (i podnosi `updated_at`)."""
     with db_connection(write=True) as conn:
         conn.execute("UPDATE tasks SET category = ?, updated_at = ? WHERE id = ?",
                      (category, now_iso(), task_id))
@@ -2165,6 +2254,7 @@ def update_task_category_db(task_id, category):
 
 
 def toggle_done_db(task_id, is_done):
+    """Oznacza zadanie jako zrobione (`1`) albo niezrobione (`0`)."""
     with db_connection(write=True) as conn:
         conn.execute("UPDATE tasks SET is_done = ?, updated_at = ? WHERE id = ?",
                      (int(is_done), now_iso(), task_id))
@@ -2172,6 +2262,7 @@ def toggle_done_db(task_id, is_done):
 
 
 def set_daily_db(task_id, is_daily):
+    """Dodaje zadanie do Daily (`is_daily=1`) albo usuwa je z Daily (`0`)."""
     with db_connection(write=True) as conn:
         conn.execute("UPDATE tasks SET is_daily = ?, updated_at = ? WHERE id = ?",
                      (int(is_daily), now_iso(), task_id))
@@ -2179,6 +2270,7 @@ def set_daily_db(task_id, is_daily):
 
 
 def update_priority_db(task_id, new_priority):
+    """Zmienia priorytet zadania ("A"/"B"/"C")."""
     with db_connection(write=True) as conn:
         conn.execute("UPDATE tasks SET priority = ?, updated_at = ? WHERE id = ?",
                      (new_priority, now_iso(), task_id))
@@ -2186,6 +2278,7 @@ def update_priority_db(task_id, new_priority):
 
 
 def delete_task_db(task_id):
+    """Trwale usuwa zadanie (bez „Cofnij” — do tego służy `delete_task_with_undo_db`)."""
     with db_connection(write=True) as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     push_database_async()
@@ -2242,6 +2335,7 @@ def restore_task_row_db(row):
 
 
 def edit_task_title_db(task_id, new_title, new_category=None):
+    """Zmienia tytuł zadania; `new_category` opcjonalnie podmienia też kategorię."""
     with db_connection(write=True) as conn:
         if new_category:
             conn.execute("UPDATE tasks SET title = ?, category = ?, updated_at = ? WHERE id = ?",
@@ -2302,6 +2396,7 @@ def restore_subtask_db(task_id, subtask_idx, subtask):
 
 
 def edit_subtask_title_db(task_id, subtask_idx, new_title):
+    """Zmienia tytuł podkroku o indeksie `subtask_idx` (poza zakresem = brak zmian)."""
     with db_connection(write=True) as conn:
         row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row and row[0]:
@@ -2335,6 +2430,7 @@ def move_subtask_db(task_id, subtask_idx, delta):
 
 
 def get_completed_archive(limit=100):
+    """Archiwum sukcesów `(id, title, priority, completed_at)`, najnowsze najpierw."""
     with db_connection() as conn:
         return conn.execute(
             "SELECT id, title, priority, completed_at FROM completed_archive ORDER BY id DESC LIMIT ?",
@@ -2343,6 +2439,7 @@ def get_completed_archive(limit=100):
 
 
 def prune_archive(keep=ARCHIVE_LIMIT):
+    """Zostawia `keep` najnowszych wpisów archiwum (rotacja; ARCHIVE_LIMIT = 2000)."""
     with db_connection(write=True) as conn:
         conn.execute(
             "DELETE FROM completed_archive WHERE id NOT IN "
@@ -2352,6 +2449,7 @@ def prune_archive(keep=ARCHIVE_LIMIT):
 
 
 def clear_completed_archive_db():
+    """Czyści archiwum sukcesów (ze snapshotem `pre_clear_archive` — akcja nieodwracalna)."""
     make_local_snapshot("pre_clear_archive")
     with db_connection(write=True) as conn:
         conn.execute("DELETE FROM completed_archive")
@@ -2359,6 +2457,12 @@ def clear_completed_archive_db():
 
 
 def end_of_day_db(keep_archive=ARCHIVE_LIMIT):
+    """Stary „koniec dnia”: zrobione → archiwum i usunięcie, niezrobione Daily → Master.
+
+    Zachowanie sprzed świadomego przełomu dnia (Sprint 2.1) — nadal używane przez
+    dialog `overlay[7]` i starsze testy. Nowy UI korzysta z `apply_day_rollover()`,
+    więc nie podmieniaj tej funkcji (złamałoby to `test_end_of_day`).
+    """
     make_local_snapshot("pre_end_of_day")
     with db_connection(write=True) as conn:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -2787,6 +2891,13 @@ def schedule_ui_update(page, callback):
 
 # --- INTERFEJS (Flet) ---
 def main(page: ft.Page):
+    """Entrypoint interfejsu Flet: baza, motyw „Dark Slate”, widoki i interakcja.
+
+    Buduje układ (PC: sidebar + treść, mobile: treść + dolna nawigacja), ustawia
+    obsługę zamknięcia okna, uruchamia startowy pull z chmury i — gdy zmienił się
+    dzień — przełom dnia. `page.overlay` ma ustaloną kolejność dialogów (kontrakt
+    testów), więc nowe okna dodawaj tylko na końcu listy.
+    """
     current_ver = get_local_version()
     page.title = f"ADHD Master & Daily (v{current_ver})"
     page.window.width = 950

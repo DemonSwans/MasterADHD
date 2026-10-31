@@ -7,7 +7,7 @@ Osobisty menedżer zadań dla osób z ADHD: **Python + Flet 1.0.4 + SQLite**, dz
 ## Komendy
 
 ```powershell
-python -m pytest test_app.py -q                       # całość (108 testów, ~26 s)
+python -m pytest test_app.py -q                       # całość (109 testów, ~26 s)
 python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 .\.venv\Scripts\flet.exe run main.py                  # uruchomienie na PC
 ```
@@ -22,12 +22,14 @@ python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 |---|---|
 | `main.py` | Entrypoint: OTA z GitHuba, splash, wybór modułu (`app_logic_ota.py` albo wbudowany `app_logic`), rollback, ekran błędu. Na końcu re-eksport symboli `app_logic` **bez** `main` (dawniej `from app_logic import *` nadpisywał entrypoint). |
 | `app_logic.py` | ~5300 linii: schemat i operacje SQLite, konfiguracja, snapshoty, backup/import JSON, synchronizacja (Gist/HA/folder), logowanie, instalacja/aktywacja OTA oraz cały interfejs Flet w `main(page)`. |
-| `test_app.py` | 108 testów: CRUD, rutyny (w tym dni tygodnia i historia z 3.1), migracje schematu starych baz, podkroki, postęp (hybrydowy z 4.2), archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile (w tym edycja z Daily z zachowaniem kategorii, usuwanie z „Cofnij”, obszary dotykowe 44 px na 400 px), wibracja z mockiem `HapticFeedback`, mini-minutnik, OTA (wybór wersji, instalacja, aktywacja, rollback), przełom dnia (`get_pending_day_rollover`/`apply_day_rollover`, UI `overlay[10]`), Inbox z triagem, znaczniki czasu i filtr „dawno nietknięte” (3.2), szacowany czas z podsumowaniem dnia (3.4) oraz sprint 4: kolejka aktualizacji UI i próg `resize` (4.1), puste Daily bez „0%” (4.2) i konflikty synchronizacji z panelem decyzji (4.4). `DummyPage` + tymczasowe bazy. |
+| `test_app.py` | 109 testów: CRUD, rutyny (w tym dni tygodnia i historia rutyn), migracje schematu starych baz, podkroki, postęp hybrydowy, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile (w tym edycja z Daily z zachowaniem kategorii, usuwanie z „Cofnij”, obszary dotykowe 44 px na 400 px), wibracja z mockiem `HapticFeedback`, mini-minutnik, OTA (wybór wersji, instalacja, aktywacja, rollback), przełom dnia (`get_pending_day_rollover`/`apply_day_rollover`, UI `overlay[10]`), Inbox z triagem, znaczniki czasu i filtr „dawno nietknięte”, szacowany czas z podsumowaniem dnia, kolejka aktualizacji UI i próg `resize`, puste Daily bez „0%”, konflikty synchronizacji z panelem decyzji oraz higiena dokumentacji (docstring każdej funkcji modułowej). `DummyPage` + tymczasowe bazy. |
 | `version.txt` | Aktualna wersja (1.7.0). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
 | `.github/workflows/build.yml` | CI: pytest → APK → Release `latest`. |
 | `assets/icon.png` | Ikona aplikacji. |
+| `README.md`, `README.en.md` | Dokumentacja dla użytkownika i dewelopera (polska + angielska). |
+| `docs/` | Dokumentacja szczegółowa: `funkcje.md`, `instalacja.md`, `synchronizacja.md`, `ota.md`, `dane.md`, `architektura.md`, `testy.md`, `rozwoj.md`, `historia-zmian.md` (+ `docs/README.md` jako indeks). |
 | `FIX_SUMMARY.md`, `README_OTA_FIX.md` | Historyczne, opisują stan 1.6.17 — nieaktualne. |
-| `.junie/plans/redesign-app-ui-ux.md` | Plan modernizacji UI (kontekst dla zmian w interfejsie). |
+| `.junie/plans/` | Plany sprintów (historyczne), m.in. `sprint-1-dokonczenie.md`. |
 
 Artefakty tylko lokalne (gitignore, nie są źródłem): `app_logic_ota.py`, `ota_version.txt`, `*.db`, `snapshots/`, `test_sync_folder/`. Aplikacja czyta bazy z folderu danych, nie z repo.
 
@@ -41,7 +43,7 @@ main.py::main → load_and_run()          (jedyny loader; nie ma drugiej ścież
   └─ app_logic.main(page)
        ├─ init_db() (+ init_config_db())
        ├─ refresh_view() → przebudowa kontrolek
-       ├─ _maybe_start_day_rollover() → dialog przełomu dnia (2.1) albo auto-tryb
+       ├─ _maybe_start_day_rollover() → dialog przełomu dnia albo auto-tryb
        ├─ akcje → db_connection(write=True) → push_database_async()
        ├─ Ustawienia → trigger_manual_ota() → install_ota_code() + activate_downloaded_ota()
        └─ wątek startup_pull → pull_database(force=False)
@@ -52,12 +54,12 @@ main.py::main → load_and_run()          (jedyny loader; nie ma drugiej ścież
 - Tabele: `tasks`, `routines`, `routine_log`, `completed_archive` w `tasks.db`; `config` w `app_config.db`. Podkroki to JSON w kolumnie `subtasks`.
 - Kolejność kolumn `get_tasks()` (używana w testach): `0 id, 1 title, 2 is_daily, 3 is_done, 4 priority, 5 subtasks, 6 category, 7 deadline`. `deadline` to opcjonalna data ISO `YYYY-MM-DD` (bez godziny); `None` = brak terminu. Nowe pola (`created_at`/`updated_at`, `estimate_min`) mają **osobne gettery**, żeby nie ruszać tej kolejności.
 - Terminy: `add_task_db(..., deadline=...)`, `set_task_deadline_db()`, `get_task_deadline()`, `update_task_details_db(..., deadline=DEADLINE_UNSET)` (sentinel = nie zmieniaj, `None` = wyczyść). Sortowanie/filtr w Master: `master_sort_mode` (`DEFAULT`/`DEADLINE`) i `master_deadline_filter` (`ALL`/`WEEK`/`OVERDUE`) w config. Przypomnienia: `deadline_reminders_enabled`, `deadline_reminder_days` (14/7/3), `deadline_reminder_repeat_day_before`, `deadline_card_hidden_date`.
-- Znaczniki czasu (3.2): kolumny `tasks.created_at` / `tasks.updated_at` (ISO z sekundami). `add_task_db()` ustawia oba; każda funkcja modyfikująca zadanie (`toggle_done_db`, `update_priority_db`, `update_task_details_db`, `edit_task_title_db`, `update_subtasks_db`, `set_daily_db`, `set_task_deadline_db`, `update_task_category_db`, triage, operacje na podkrokach) podnosi `updated_at` przez `now_iso()`. Odczyt: `get_task_timestamps(task_id)` — `get_tasks()` zachowuje kolejność 0–7. Stare wiersze dostają datę migracji w `_backfill_task_timestamps()`. Filtr Master „🕰 Dawno nietknięte”: `is_stale_task(...)` / `get_stale_task_ids(days=STALE_TASK_DAYS)` (14 dni) — tylko nieukończone, bez zmian od 14+ dni i bez przyszłego terminu; stan przełącznika w config `master_stale_only` (`0`/`1`). `updated_at` nie jest używany do wykrywania konfliktów synchronizacji — 4.4 rozstrzyga je po skrócie treści bazy (patrz „Synchronizacja”).
-- Przełom dnia (2.1): `get_pending_day_rollover()` (tylko czyta — `None`, gdy `last_reset_date` == dziś albo brak znacznika) i `apply_day_rollover(decisions, mode)` (snapshot `pre_day_rollover`, archiwizuje zrobione dokładnie raz, usuwa je z `tasks`, ustawia `last_reset_date` = dziś, `push_database_async()`). Decyzje to mapa `{task_id: "keep"|"master"|"remove"}`; zadanie bez decyzji = „keep”. Tryb w config `day_rollover_mode` = `ask` (domyślnie) / `auto_keep` / `auto_master` (`get_day_rollover_mode()` normalizuje śmieci do `ask`). `end_of_day_db()` zostaje bez zmian (zgodność i starsze testy).
-- Inbox (2.3): stała `INBOX_CATEGORY = "📥 Inbox"` (bez zmian schematu). Szybki zrzut (`save_quick_dump`, Daily `save_inline_input`) trafia do Inbox z `priority="C"`, `is_daily=False`. `get_inbox_tasks()` filtruje po kategorii, a `triage_inbox_task_db(task_id, category, priority, is_daily, deadline)` przenosi zadanie do wybranej kategorii (`Inbox` spada do `Ogólne`) i kończy `push_database_async()`. Zadania z Inbox są wykluczone z listy Master i pokazywane w sekcji triage'u (ukrytej, gdy pusta).
+- Znaczniki czasu: kolumny `tasks.created_at` / `tasks.updated_at` (ISO z sekundami). `add_task_db()` ustawia oba; każda funkcja modyfikująca zadanie (`toggle_done_db`, `update_priority_db`, `update_task_details_db`, `edit_task_title_db`, `update_subtasks_db`, `set_daily_db`, `set_task_deadline_db`, `update_task_category_db`, triage, operacje na podkrokach) podnosi `updated_at` przez `now_iso()`. Odczyt: `get_task_timestamps(task_id)` — `get_tasks()` zachowuje kolejność 0–7. Stare wiersze dostają datę migracji w `_backfill_task_timestamps()`. Filtr Master „🕰 Dawno nietknięte”: `is_stale_task(...)` / `get_stale_task_ids(days=STALE_TASK_DAYS)` (14 dni) — tylko nieukończone, bez zmian od 14+ dni i bez przyszłego terminu; stan przełącznika w config `master_stale_only` (`0`/`1`). `updated_at` nie jest używany do wykrywania konfliktów synchronizacji — rozstrzyga je skrót treści bazy (patrz „Synchronizacja”).
+- Przełom dnia: `get_pending_day_rollover()` (tylko czyta — `None`, gdy `last_reset_date` == dziś albo brak znacznika) i `apply_day_rollover(decisions, mode)` (snapshot `pre_day_rollover`, archiwizuje zrobione dokładnie raz, usuwa je z `tasks`, ustawia `last_reset_date` = dziś, `push_database_async()`). Decyzje to mapa `{task_id: "keep"|"master"|"remove"}`; zadanie bez decyzji = „keep”. Tryb w config `day_rollover_mode` = `ask` (domyślnie) / `auto_keep` / `auto_master` (`get_day_rollover_mode()` normalizuje śmieci do `ask`). `end_of_day_db()` zostaje bez zmian (zgodność i starsze testy).
+- Inbox: stała `INBOX_CATEGORY = "📥 Inbox"` (bez zmian schematu). Szybki zrzut (`save_quick_dump`, Daily `save_inline_input`) trafia do Inbox z `priority="C"`, `is_daily=False`. `get_inbox_tasks()` filtruje po kategorii, a `triage_inbox_task_db(task_id, category, priority, is_daily, deadline)` przenosi zadanie do wybranej kategorii (`Inbox` spada do `Ogólne`) i kończy `push_database_async()`. Zadania z Inbox są wykluczone z listy Master i pokazywane w sekcji triage'u (ukrytej, gdy pusta).
 - Rutyny: `routines.routine_days` to JSON z intami `0..6` (0 = poniedziałek … 6 = niedziela, konwencja `datetime.weekday()`); `[]` = codziennie, a rutyny zapisane przed tą kolumną są traktowane jak codzienne. `get_routines()` zwraca krotki `(id, title, is_done, days)`, zapis przez `add_routine_db(title, days=None)` / `update_routine_db(id, title, days=None)` (ta druga obsługuje edycję z Ustawień), a widok Daily filtruje rutyny przez `get_daily_routines()`. JSON export/import przenosi `days`.
-- Historia rutyn (3.1): tabela `routine_log(id, routine_id, date, done, UNIQUE(routine_id, date))`, data ISO `YYYY-MM-DD`. `toggle_routine_db(routine_id, is_done, day=None)` robi UPSERT wpisu na dziś (`ON CONFLICT ... DO UPDATE`) **oraz** ustawia `routines.is_done` (szybki stan bieżący). `is_done` resetują przełom dnia i `end_of_day_db()`, ale historia zostaje. `delete_routine_db()` kasuje też wpisy historii usuwanej rutyny. Odczyt: `get_routine_log_map(routine_id=None, since=None)` → `{routine_id: {date_iso: done}}` (zawężenie `routine_id` nadal zwraca zewnętrzną mapę po id). Czyste helpery: `routine_week_view(days, log_map, today)` → `(7 wpisów, zrobione, zaplanowane)`, `routine_current_streak(days, log_map, today)` (miękka seria — dzisiejszy niepełny dzień i dni niezaplanowane nie przerywają) i `build_routine_week_stripe(entries)`. Ustawienia pokazują pasek 7 dni + „w tym tygodniu: X/Y” + „seria: N dni z rzędu” (od 2). **Nigdy nie komunikujemy „straciłeś serię”.** JSON export/import przenosi `routine_log` (klucz opcjonalny; import mapuje stare `routine_id` na nowe `lastrowid`).
-- Szacowany czas (3.4): kolumna `tasks.estimate_min` (INTEGER, nullable). `add_task_db(..., estimate_min=None)` ustawia ją przy tworzeniu, `update_task_details_db(..., estimate=ESTIMATE_UNSET)` zmienia/czyści (sentinel = nie ruszaj, `None` = usuń), `set_task_estimate_db(task_id, min)` to samo w jednej akcji. Helpery: `normalize_estimate_min` (śmieci/<=0/`True` → `None`, nigdy nie rzuca), `format_duration_pl` („1 h 40 min”), `sum_estimates(map, tasks)` → `(suma_minut, liczba_bez_szacunku)`, `get_task_estimate(task_id)`, `get_estimates_map()`. `TASK_ROW_COLUMNS` zawiera `estimate_min`, więc „Cofnij” po usunięciu zachowuje szacunek. Dialog dodawania (Master) i edycji mają sekcję 5/15/30/60/własne/„Bez szacunku”; karta postępu na Daily pokazuje „Zaplanowane: ~X h Y min · bez szacunku: n” (tylko gdy suma > 0; jedna liczba, bez wykresów).
+- Historia rutyn: tabela `routine_log(id, routine_id, date, done, UNIQUE(routine_id, date))`, data ISO `YYYY-MM-DD`. `toggle_routine_db(routine_id, is_done, day=None)` robi UPSERT wpisu na dziś (`ON CONFLICT ... DO UPDATE`) **oraz** ustawia `routines.is_done` (szybki stan bieżący). `is_done` resetują przełom dnia i `end_of_day_db()`, ale historia zostaje. `delete_routine_db()` kasuje też wpisy historii usuwanej rutyny. Odczyt: `get_routine_log_map(routine_id=None, since=None)` → `{routine_id: {date_iso: done}}` (zawężenie `routine_id` nadal zwraca zewnętrzną mapę po id). Czyste helpery: `routine_week_view(days, log_map, today)` → `(7 wpisów, zrobione, zaplanowane)`, `routine_current_streak(days, log_map, today)` (miękka seria — dzisiejszy niepełny dzień i dni niezaplanowane nie przerywają) i `build_routine_week_stripe(entries)`. Ustawienia pokazują pasek 7 dni + „w tym tygodniu: X/Y” + „seria: N dni z rzędu” (od 2). **Nigdy nie komunikujemy „straciłeś serię”.** JSON export/import przenosi `routine_log` (klucz opcjonalny; import mapuje stare `routine_id` na nowe `lastrowid`).
+- Szacowany czas: kolumna `tasks.estimate_min` (INTEGER, nullable). `add_task_db(..., estimate_min=None)` ustawia ją przy tworzeniu, `update_task_details_db(..., estimate=ESTIMATE_UNSET)` zmienia/czyści (sentinel = nie ruszaj, `None` = usuń), `set_task_estimate_db(task_id, min)` to samo w jednej akcji. Helpery: `normalize_estimate_min` (śmieci/<=0/`True` → `None`, nigdy nie rzuca), `format_duration_pl` („1 h 40 min”), `sum_estimates(map, tasks)` → `(suma_minut, liczba_bez_szacunku)`, `get_task_estimate(task_id)`, `get_estimates_map()`. `TASK_ROW_COLUMNS` zawiera `estimate_min`, więc „Cofnij” po usunięciu zachowuje szacunek. Dialog dodawania (Master) i edycji mają sekcję 5/15/30/60/własne/„Bez szacunku”; karta postępu na Daily pokazuje „Zaplanowane: ~X h Y min · bez szacunku: n” (tylko gdy suma > 0; jedna liczba, bez wykresów).
 - Folder danych: `%USERPROFILE%\.master_adhd_data\` (Android: `FLET_APP_STORAGE_DATA/.master_adhd_data`). Tam też `master_adhd.log`, `snapshots/`, pliki OTA.
 - Zapis wyłącznie przez `db_connection(write=True)` (WAL, `busy_timeout`, `RLock`, zawsze `close()`). `write=True` przy `LOCAL_DB` przesuwa `db_last_change` — bez tego zmiana nie jest widoczna dla rozstrzygania konfliktów synchronizacji.
 - Migracje schematu: `ensure_schema(conn)` dodaje brakujące kolumny (`tasks.subtasks`, `tasks.category`, `tasks.deadline`, `tasks.created_at`, `tasks.updated_at`, `tasks.estimate_min`, `routines.routine_days`) przez `PRAGMA table_info` + `ALTER TABLE`, tworzy tabelę `routine_log` (`CREATE TABLE IF NOT EXISTS`) i uzupełnia znaczniki czasu starych wierszy (`_backfill_task_timestamps`). Wywołują ją `init_db()`, `export_database_to_json_dict()`, `import_database_from_json_dict()`, `add_routine_db()`, `update_routine_db()` i `toggle_routine_db()`. **Każde miejsce, które podmienia plik `LOCAL_DB` bajtami innej bazy (pull Gist/HA/folder, `_restore_db_from_bytes`, `restore_pre_sync_backup`), musi po tym wywołać `ensure_schema_upgrade()`** — inaczej stara kopia bez nowej kolumny/tabeli wywala `SELECT` w widoku (`no such column` / `no such table: routine_log`).
@@ -73,7 +75,7 @@ Trzy tryby w `config["sync_mode"]`: `gist`, `ha_server`, `folder` (domyślnie `n
 - `pull_database(force=False, resolve_conflict=False)` nie nadpisuje nowszych danych lokalnych (`db_last_change`, `exported_at`, `Last-Modified`, mtime); `force=True` pobiera zawsze.
 - `ha_server` wysyła/odbiera `tasks.db` pod `ha_url` (POST/GET). W repo nie ma serwera — `server_sync.py` został usunięty.
 - Stan zapisu → `SYNC_STATE` + badge w UI (`register_sync_status_callback`); `set_sync_status("conflict", ...)` daje gałąź `"conflict"` w `on_sync_state`.
-- Konflikty (4.4, wariant minimalny): `last_synced_hash` + `last_synced_at` (config) to punkt odniesienia ostatniej udanej synchronizacji, zapisywany przez `_mark_synced()` (wywoływane przed każdym sukcesem w `push_database`/`pull_database`), a czyszczony przez `_reset_sync_markers()` przy zmianie trybu. `_detect_conflict(remote_hash, label)` porównuje **skrót treści** bazy (`_sqlite_content_hash`/`_db_content_hash`/`_content_hash_of_bytes` liczą wiersze, nie surowe bajty — brak fałszywych trafień od układu stron SQLite) i zgłasza konflikt tylko gdy jednocześnie: istnieje punkt odniesienia, zmieniła się i lokalna, i zdalna, a skróty są różne. Brak punktu odniesienia / identyczne treści / zmiana tylko jednej strony → brak konfliktu. Wykryty konflikt zapisuje `set_sync_conflict_state()` do configu `sync_conflict` (JSON: `detected_at`, `label`, `local_hash`, `remote_hash`, `choice_pending`) i **nie nadpisuje** danych; `pull_database` zwraca wtedy `(True, "Wykryto konflikt synchronizacji — wybierz wersję w panelu")`, a `push_database` odmawia (`(False, "Konflikt synchronizacji — najpierw wybierz wersję")`). `get_sync_conflict()` czyta oczekujący konflikt, `clear_sync_conflict()` go kasuje. `resolve_sync_conflict(choice)` przyjmuje jedną z `SYNC_CONFLICT_CHOICES = ("keep_local", "keep_remote", "restore_snapshot")`: `keep_local` wysyła lokalną wersję, `keep_remote` robi snapshot `pre_conflict_remote` i pobiera zdalną z `force=True`, `restore_snapshot` wraca do ostatniej kopii bezpieczeństwa. UI: banner w Daily/Master (`_resolve_conflict_click`) z trzema przyciskami i „Cofnij”. Kodowanie rekordów/tombstones i synchronizacja `app_config.db` to nadal przyszłość.
+- Konflikty synchronizacji (wariant minimalny): `last_synced_hash` + `last_synced_at` (config) to punkt odniesienia ostatniej udanej synchronizacji, zapisywany przez `_mark_synced()` (wywoływane przed każdym sukcesem w `push_database`/`pull_database`), a czyszczony przez `_reset_sync_markers()` przy zmianie trybu. `_detect_conflict(remote_hash, label)` porównuje **skrót treści** bazy (`_sqlite_content_hash`/`_db_content_hash`/`_content_hash_of_bytes` liczą wiersze, nie surowe bajty — brak fałszywych trafień od układu stron SQLite) i zgłasza konflikt tylko gdy jednocześnie: istnieje punkt odniesienia, zmieniła się i lokalna, i zdalna, a skróty są różne. Brak punktu odniesienia / identyczne treści / zmiana tylko jednej strony → brak konfliktu. Wykryty konflikt zapisuje `set_sync_conflict_state()` do configu `sync_conflict` (JSON: `detected_at`, `label`, `local_hash`, `remote_hash`, `choice_pending`) i **nie nadpisuje** danych; `pull_database` zwraca wtedy `(True, "Wykryto konflikt synchronizacji — wybierz wersję w panelu")`, a `push_database` odmawia (`(False, "Konflikt synchronizacji — najpierw wybierz wersję")`). `get_sync_conflict()` czyta oczekujący konflikt, `clear_sync_conflict()` go kasuje. `resolve_sync_conflict(choice)` przyjmuje jedną z `SYNC_CONFLICT_CHOICES = ("keep_local", "keep_remote", "restore_snapshot")`: `keep_local` wysyła lokalną wersję, `keep_remote` robi snapshot `pre_conflict_remote` i pobiera zdalną z `force=True`, `restore_snapshot` wraca do ostatniej kopii bezpieczeństwa. UI: banner w Daily/Master (`_resolve_conflict_click`) z trzema przyciskami i „Cofnij”. Kodowanie rekordów/tombstones i synchronizacja `app_config.db` to nadal przyszłość.
 
 ### OTA
 
@@ -104,6 +106,9 @@ Trzy tryby w `config["sync_mode"]`: `gist`, `ha_server`, `folder` (domyślnie `n
 - **Wszystkie testy trzymaj w jednym pliku `test_app.py`** — także nowe; na razie nie dzielimy ich na osobne pliki (`test2_app.py` nie istnieje i nie jest uruchamiany przez CI). Autouse fixture przekierowuje bazy do `tmp_path` przez `app_logic.LOCAL_DB`/`CONFIG_DB` (patchuj `app_logic`, nie tylko `main`) **oraz wszystkie ścieżki OTA z `main`** (`OTA_DIR`, `OTA_*_FILE`, reset `_PREPARED_CACHE`), więc nie pisz do folderu użytkownika.
 - Nie zapisuj plików OTA do folderu repozytorium — tylko do folderu danych.
 - `main.py` jest zamrożony w APK: zmiana w nim działa dopiero po zainstalowaniu nowego APK. Zmiany w `app_logic.py` docierają przez OTA.
+- **Kod zawsze z dokumentacją.** Każda zmiana kodu musi mieć dokumentację — nie jest ukończona bez niej. Nowa funkcja/kolumna schematu/klucz configu/ścieżka zapisu: docstring lub komentarz w `app_logic.py` wyjaśniający cel i kontrakt (moduł ma opis na górze, a **każda funkcja modułowa** docstring — pilnuje tego `test_module_level_functions_have_docstrings`), oraz aktualizacja odpowiedniej sekcji tego pliku (tabele i „Mapa plików”, „Dane”/„Synchronizacja”/„OTA”, „Znane pułapki”, „Backlog” przy nowych pomysłach). Jeśli zmienia się zachowanie widoczne dla użytkownika albo publiczne API modułu, dopisz też notkę do sekcji, która je opisuje. Dokumentacja jest częścią definicji ukończenia. Zmiany widoczne dla użytkownika opisuj też w `README.md` i w odpowiedniej stronie `docs/` (indeks: `docs/README.md`), a wersję dopisz do `docs/historia-zmian.md`.
+- **Zmiany schematu i zapisu.** Każda zmiana schematu = `ensure_schema()` + `ensure_schema_upgrade()` po każdej podmianie pliku bazy + eksport/import JSON + test migracji starej bazy; nowe kolumny dopisuj na końcu `SELECT` w `get_tasks()` (testy używają pozycji 0–7) albo dodaj osobny getter. Każdy zapis do bazy kończy się `push_database_async()`.
+- **Łagodna degradacja.** Wszystko opcjonalne (brak wsparcia platformy, uprawnień, pliku, sieci) ma logować i działać jak dotąd, nigdy nie wywalać aplikacji. Naprawiając znaną pułapkę, usuń ją z „Znanych pułapek” i dopisz, co ją zastąpiło.
 ZASADA GIT: Po wykonaniu git commit i git push NIGDY nie uruchamiaj gh run watch ani nie czekaj na zakończenie GitHub Actions / builda APK. Zakończ odpowiedź od razu po git push.
 ## Znane pułapki (stan obecny)
 
@@ -113,375 +118,13 @@ ZASADA GIT: Po wykonaniu git commit i git push NIGDY nie uruchamiaj gh run watch
 - `init_db()` nie może ruszać `db_last_change` (jest test) — inaczej pull z chmury nigdy nic nie pobierze.
 - **`no such column: routine_days`** (crash widoku po starcie/pullu) = baza bez nowej kolumny, np. kopia z chmury/snapshotu sprzed 1.6.21. `get_routines()` sama domyka schemat i ponawia `SELECT` (ostatecznie czyta bez dni tygodnia), ale każde nowe miejsce podmieniające plik `LOCAL_DB` musi wołać `ensure_schema_upgrade()`. Uwaga: stary wzorzec `ALTER TABLE ... except sqlite3.OperationalError: pass` połykał także „database is locked”, więc migracja mogła cicho nie wykonać się wcale — `_ensure_column()` sprawdza `PRAGMA table_info` i loguje realne błędy.
 - W APK, które użytkownicy mają **przed** wersją 1.6.19, działa stary, zepsuty loader. Pierwsza naprawa wymaga jednorazowej instalacji nowego APK; dopiero potem OTA działa automatycznie.
-- **Minutnik po zminimalizowaniu aplikacji nie da sygnału.** To świadoma decyzja: aplikacja nie używa powiadomień systemowych ani `AlarmManager`. Nie dodawaj `flet-notifications`/`flet-audio` „przy okazji” i nie traktuj braku sygnału w tle jako regresji. W otwartej aplikacji sygnałem ma być wibracja/dźwięk (zadanie 1.1).
+- **Minutnik po zminimalizowaniu aplikacji nie da sygnału.** To świadoma decyzja: aplikacja nie używa powiadomień systemowych ani `AlarmManager`. Nie dodawaj `flet-notifications`/`flet-audio` „przy okazji” i nie traktuj braku sygnału w tle jako regresji. W otwartej aplikacji sygnałem ma być wibracja/dźwięk.
 - **Przełom dnia a `end_of_day_db()`.** Stara funkcja `end_of_day_db()` nadal istnieje i zachowuje się jak dawniej (niezrobione dzienne → `is_daily=0`) — korzystają z niej starsze testy i „Koniec dnia” z dialogu `overlay[7]`. Nowy UI (Daily: przycisk „🌅 Nowy dzień / Koniec dnia”, karta w Ustawieniach) używa `day_rollover_dialog` i `apply_day_rollover(...)`, gdzie niezrobione zadania zostają na Daily, dopóki użytkownik nie zdecyduje. Nie podmieniaj `end_of_day_db()` na nową logikę — złamie to `test_end_of_day`.
 - **Pierwsze uruchomienie nie pokazuje dialogu przełomu.** Gdy `last_reset_date` jest pusty (świeża instalacja), `_maybe_start_day_rollover()` cicho ustawia go na dziś i kończy — bez modala. Dialog pojawia się dopiero, gdy data faktycznie się zmieni.
 - **Sekcja Inbox to `ft.Container`, nie `ft.Column`.** Testy znajdują kolumnę kart przez `[c for c in content_col.controls if isinstance(c, ft.Column)][0]`; gdyby sekcja Inbox była `Column` na Master, podmieniłaby `tasks_column`. Trzymaj ją jako kontener, a listę Inbox w środku.
 - Kolejność `content_column.controls` na Daily jest kontraktem: `[2]` = karta minutnika, `[3]` = karta postępu. Nie wstawiaj nowych elementów przed nimi (`test_archive_and_timer_ui`, `test_mobile_touch_targets_at_400px`).
-- **Konflikt synchronizacji (4.4) potrzebuje punktu odniesienia.** `_detect_conflict()` milczy, dopóki `last_synced_hash` jest pusty (pierwsza synchronizacja ustawia go przez `_mark_synced()`). Skrót liczy wiersze (`_sqlite_content_hash`), nie surowe bajty, więc sam `VACUUM`/przepisanie pliku nie udaje konfliktu. Przy testach konfliktów ustaw `sync_mode="none"` na czas zmian lokalnych — w trybie `folder` każdy zapis od razu pushuje i `last_synced_hash` się aktualizuje, więc konflikt nie powstanie.
+- **Konflikt synchronizacji potrzebuje punktu odniesienia.** `_detect_conflict()` milczy, dopóki `last_synced_hash` jest pusty (pierwsza synchronizacja ustawia go przez `_mark_synced()`). Skrót liczy wiersze (`_sqlite_content_hash`), nie surowe bajty, więc sam `VACUUM`/przepisanie pliku nie udaje konfliktu. Przy testach konfliktów ustaw `sync_mode="none"` na czas zmian lokalnych — w trybie `folder` każdy zapis od razu pushuje i `last_synced_hash` się aktualizuje, więc konflikt nie powstanie.
 - **`on_resize` reaguje tylko na próg `is_mobile()` (650 px).** `on_page_resize` porównuje nowy stan z `last_is_mobile`; nie dodawaj debounce/`page.run_task` — test liczy wywołania `refresh_view` i zmiana 950→949 nie może przebudowywać widoku.
-
----
-
-## Plan rozwoju (ADHD-first)
-
-Plan spisany przy **v1.6.23** (2026-10-29). Numeracja linii dotyczy tej wersji i z czasem się przesunie — szukaj po nazwach funkcji, nie po numerach. Kolejność sprintów jest celowa: najpierw to, co użytkownik odczuje natychmiast, potem rytuały dnia, potem dane i niezawodność. **Nie zaczynaj sprintu 2, zanim sprint 1 nie jest wdrożony i przetestowany.**
-
-### Co już działa i ma zostać
-
-Szybki zrzut myśli (`save_quick_dump` → Inbox), limit zadań „A” (`max_a_limit`), rutyny z dniami tygodnia, podkroki z kolejnością, spokojna karta terminów (bez wyskakujących okien), archiwum sukcesów, snapshoty + rotacja, OTA z rollbackiem, trzy tryby synchronizacji, świadomy przełom dnia i Inbox z triagem (od 1.6.26), znaczniki czasu zadań i filtr Master „Dawno nietknięte” (od 1.6.27), historia rutyn z miękkimi seriami i szacowany czas zadań (od 1.6.28), a od 1.7.0 także hybrydowy postęp dnia, jeden punkt aktualizacji UI + próg `resize`, świadome rozstrzyganie konfliktów synchronizacji oraz higiena logów i testów (sprint 4.1/4.2/4.4/4.5). Tego nie przeprojektowujemy — nowe funkcje mają się do tego dopinać.
-
-### Zasady pracy z planem
-
-1. **Jeden sprint = jedna wersja.** Po sprincie podnieś `version.txt` **i** `FALLBACK_VERSION` w `app_logic.py`, uruchom `python -m pytest test_app.py -q`, zaktualizuj tabelę statusów niżej i dopisz zmiany do AGENTS.md.
-2. **Zmiany w `main.py` wymagają nowego APK.** Wszystko, co ma dotrzeć przez OTA, musi być w `app_logic.py` (albo w nowym pliku ładowanym przez `app_logic`). Jeśli sprint wymaga `main.py`, zaplanuj wydanie APK i napisz to w opisie.
-3. **Każda zmiana schematu** = `ensure_schema()` + `ensure_schema_upgrade()` po każdej podmianie pliku bazy + eksport/import JSON + test migracji starej bazy. Nowe kolumny dopisuj **na końcu** `SELECT` w `get_tasks()` (testy używają pozycji 0–7) albo dodaj osobny getter.
-4. **Każdy zapis do bazy** kończy się `push_database_async()`.
-5. **Nowe okna** dopisuj na końcu `page.overlay` (obecnie 11 dialogów; indeksy 3/4/5/9 są kontraktem testów).
-6. **Nie zwiększaj liczby widoków bez potrzeby** — testy indeksują sidebar i dolną nawigację. Preferuj pełnoekranowe nakładki i sekcje w istniejących widokach.
-7. **Wszystko opcjonalne musi degradować się łagodnie**: brak wsparcia platformy, brak uprawnień, brak pliku → log + działanie jak dziś, nigdy crash.
-8. **Naprawiając znaną pułapkę**, usuń ją z sekcji „Znane pułapki” i dopisz, co ją zastąpiło.
-9. **Nie dodawaj `except Exception: pass`** w nowym kodzie — używaj `LOG.warning/exception` z kontekstem.
-
-### Tablica sprintów
-
-| Sprint | Cel | Rozmiar | Status |
-|---|---|---|---|
-| 1. Mniej tarcia | Cofanie pomyłek, czytelność, timer widoczny w każdym widoku | S/M | gotowy (1.6.25) — 1.1–1.5 wdrożone |
-| 2. Rytuał dnia i „Co teraz?” | Mniej decyzji, jedno zadanie na raz, świadomy przełom dnia | M | częściowo (1.6.26) — 2.1 i 2.3 wdrożone; 2.2 pominięty decyzją użytkownika |
-| 3. Pamięć i refleksja | Historia rutyn, znaczniki czasu i filtr „duchy”, czas szacowany | M | gotowy (1.6.28) — 3.1, 3.2 i 3.4 wdrożone; 3.3 usunięty decyzją użytkownika |
-| 4. Niezawodność i bezpieczeństwo | Wątki, postęp, podpis OTA, konflikty synchronizacji | M/L | częściowo (1.7.0) — 4.1, 4.2, 4.4, 4.5 wdrożone; 4.3 pominięty decyzją użytkownika |
-
----
-
-## Sprint 1 — „Mniej tarcia”
-
-**Cel:** osoba z ADHD może natychmiast cofnąć pomyłkę, widzi timer niezależnie od widoku, a edycja z Daily nie psuje kategorii. Wszystko na telefonie ma być klikalne palcem, nie paznokciem.
-
-### 1.1. Wibracja w otwartej aplikacji (bez powiadomień systemowych)
-
-`P2 · S · Status: gotowe (1.6.25)`
-
-**Decyzja.** Świadomie **nie dodajemy powiadomień systemowych** ani harmonogramu alarmów. Nie dodawać `flet-notifications`, `flet-audio` ani podobnych pakietów, nie zmieniać `requirements.txt`/`build.yml`, nie prosić o uprawnienia do powiadomień. Minutnik po zminimalizowaniu lub zablokowaniu telefonu pozostanie niemy — to zaakceptowane ograniczenie, nie bug.
-
-**Problem.** `play_sound_feedback()` (app_logic.py:1211) gra wyłącznie przez `winsound` na Windows. Na Androidzie wpisuje `LOG.debug` i kończy — w otwartej aplikacji nie ma żadnego potwierdzenia końca timera ani ukończenia zadania. Wibracja nie jest używana nigdzie.
-
-**Co zrobić.**
-
-1. Dodać `ft.HapticFeedback` do `page.services` (przez `getattr(ft, "HapticFeedback", None)`, bo w CI jest Flet 1.0.4) i wywoływać krótką wibrację przy: końcu timera (gdy aplikacja jest otwarta), oznaczeniu zadania/rutyny, „Cofnij”.
-2. Metody są `async` — wywoływać przez `page.run_task(...)`; całość w `try/except` + `LOG.debug`. Brak wsparcia urządzenia = ciche pominięcie, nie crash.
-3. Na Windows zostawić `winsound` i dodać wibrację tylko na platformach mobilnych.
-4. W Ustawieniach wykorzystać istniejące `sound_enabled`; zmienić etykietę na „Dźwięk i wibracja”, bez nowych kluczy configu.
-5. Nie ruszać logiki terminów — karta „Nadchodzące terminy” zostaje jedynym przypomnieniem (bez powiadomień systemowych).
-
-**Kryteria akceptacji.**
-
-- Na Androidzie timer kończący się przy otwartej aplikacji powoduje wibrację.
-- Oznaczenie zadania daje krótką wibrację, jeśli urządzenie ją wspiera.
-- Brak wsparcia/uprawnień nie powoduje crasha; na PC bez zmian.
-- Zero nowych zależności. Jeśli runtime APK nie ma `HapticFeedback`, funkcja po prostu nie działa — bez crasha i bez nowego wydania.
-
-**Testy.** Mock `HapticFeedback` → wibracja wołana na koniec timera; brak atrybutu w `ft` → brak wyjątku; `sound_enabled=0` wyłącza wibrację.
-
-**Ograniczenie.** Po zminimalizowaniu/zablokowaniu telefonu timer nie da sygnału. To świadoma decyzja użytkownika — nie dodawaj powiadomień systemowych „przy okazji” i nie zgłaszaj tego jako regresji (wpis w „Znanych pułapkach”).
-
-### 1.2. „Cofnij” zamiast okna potwierdzenia
-
-`P1 · S/M · Status: gotowe (1.6.24)`
-
-**Problem.** Usuwanie zadania wymaga przejścia przez dialog (`open_delete_task_dialog`, app_logic.py:2509), podobnie czyszczenie archiwum. To dwa dodatkowe kliknięcia przy każdej pomyłce — a przy ADHD pomyłki są częste, więc tarcie sumuje się szybciej niż ryzyko przypadkowego usunięcia.
-
-**Co zrobić.**
-
-1. Usuwanie zadania/podkroku: natychmiastowa akcja + `ft.SnackBar` „Usunięto «...». Cofnij” przez ~6 s. SnackBar z akcją „Cofnij” przywraca rekord (najprościej: zapisz pełny wiersz przed `DELETE` i wstaw go ponownie z tym samym `id`, albo użyj miękkiego usuwania — patrz sprint 4.4).
-2. Zostawić dialog tylko dla operacji nieodwracalnych zbiorczo (np. „Wyczyść całe archiwum”, import zastępujący dane).
-3. Ograniczyć stos cofania do ostatniej akcji — nie budować pełnej historii (to sprint 4.4).
-4. Upewnić się, że cofnięcie przywraca kategorię, priorytet, termin i podkroki.
-
-**Kryteria akceptacji.**
-
-- Usunięcie zadania jednym kliknięciem, cofnięcie przywraca je w tej samej liście z pełnymi danymi.
-- Po 6 s SnackBar znika i akcja jest ostateczna.
-- Na mobile SnackBar nie zasłania dolnej nawigacji (test na 400 px).
-
-**Testy.** Usuń → cofnij → `get_tasks()` zawiera rekord z tym samym `id` i polami; drugie kliknięcie „Cofnij” nie duplikuje rekordu.
-
-### 1.3. Bug: edycja z Daily nadpisuje kategorię
-
-`P0 · S · Status: gotowe (1.6.24)`
-
-**Problem.** Karty na Daily wołają `open_edit_task_dialog(tid, tit)` bez `current_category` (app_logic.py:3660 dla PC i 3785 dla mobile). Domyślna wartość parametru to „Ogólne”, więc zapis kasuje prawdziwą kategorię. W Masterze i w karcie przypomnień jest już poprawione (przekazywane `cat`).
-
-**Co zrobić.** Przekazać `current_category=category` w obu miejscach, dodać test regresyjny i usunąć odpowiednią pułapkę z AGENTS.md po wdrożeniu.
-
-**Kryteria akceptacji.** Edycja zadania z kategorią „💼 Praca” otwiera dropdown z tą wartością i po zapisie niczego nie zmienia.
-
-**Testy.** `test_ui_edit_task_from_daily_keeps_category` — otwórz dialog z karty Daily, zapisz bez zmian, sprawdź `category` w bazie.
-
-### 1.4. Dotyk i czytelność
-
-`P1 · S · Status: gotowe (1.6.25)`
-
-**Problem.** Ikony edycji/usuwania mają 28×28 px (app_logic.py:3653–3664 i odpowiednik mobile), a drobne teksty 10–12 px. Na telefonie to proszenie się o pomyłkę, zwłaszcza przy pośpiechu i drżeniu rąk.
-
-**Co zrobić.**
-
-1. Wszystkie akcje podstawowe (zrobione, edytuj, usuń, dodaj, timer) mają minimum 44×44 px obszaru klikalnego; sama ikona może zostać mała, ale `width/height` kontenera ma być ≥ 44.
-2. Podnieść bazową wielkość tekstu zadań i rutyn do 14 px, metadanych do 12 px; nie powiększać wszystkiego — tylko to, co się czyta.
-3. Sprawdzić kontrast `COLOR_TEXT_SECONDARY` na `COLOR_BG_CARD` (docelowo ≥ 4.5:1).
-4. Nie usuwać gęstości PC — zmiany mają dotyczyć głównie `is_mobile()`.
-
-**Kryteria akceptacji.** Na 400 px żaden element akcji nie ma mniej niż 44 px; lista nadal mieści 5–6 zadań na ekranie bez przewijania w nieskończoność.
-
-### 1.5. Globalny mini-minutnik
-
-`P1 · S/M · Status: gotowe (1.6.25)`
-
-**Problem.** Timer jest widoczny tylko na Daily, a jego stan (`timer_seconds_left`) żyje w `main(page)`. Po przejściu do Master użytkownik traci poczucie czasu — a to jedna z głównych trudności w ADHD.
-
-**Co zrobić.** Dodać mały wskaźnik (mm:ss + ikona) w sidebarze na PC i w pasku dolnym/nagłówku na mobile, widoczny we wszystkich widokach. Kliknięcie wraca do Daily. Źródłem prawdy pozostaje istniejący stan timera i `update_timer_ui()`; nie tworzyć drugiego wątku.
-
-**Kryteria akceptacji.** Start timera → przejście do Master → licznik nadal odlicza i jest widoczny; pauza/reset działają z każdego widoku.
-
----
-
-## Sprint 2 — „Rytuał dnia i Co teraz?”
-
-> **Stan (1.6.26):** wdrożone 2.1 (świadomy przełom dnia) i 2.3 (Inbox + triage). Krok **2.2 („Co teraz?” / tryb fokusu) został świadomie pominięty** decyzją użytkownika — nie implementuj go bez nowej decyzji. Z tego powodu nagłówek sprintu mówi jeszcze „Co teraz?”, ale ta część nie istnieje w kodzie.
-
-**Cel:** zmniejszyć liczbę decyzji. Dzień ma się zaczynać i kończyć jednym świadomym gestem, a w ciągu dnia ma być widoczne **jedno** zadanie, nie lista.
-
-### 2.1. Świadomy przełom dnia (bez gubienia zadań)
-
-`P0 · M · Status: gotowe (1.6.26)`
-
-**Problem.** `end_of_day_db()` (app_logic.py:1710) przenosi zrobione zadania do archiwum, a **niezrobione dzienne zadania zdejmuje z Daily** (`is_daily=0`) bez pytania. Jeśli użytkownik nie kliknie „Koniec dnia”, karta nowego dnia pojawia się dopiero przy kolejnym uruchomieniu i tylko informuje, że „ostatni reset był wcześniej” (app_logic.py:4335). Stan dnia się rozjeżdża, postęp traci sens, a zadania znikają z pola widzenia.
-
-**Dlaczego to ważne dla ADHD.** Najgorsze, co może zrobić aplikacja, to cicho zgubić rzecz, którą użytkownik miał zrobić — wtedy albo o niej zapomni, albo dostanie poczucie porażki. Potrzebny jest krótki, spokojny rytuał z jasnym wyborem.
-
-**Co zrobić.**
-
-1. Przy starcie (i najlepiej po powrocie z tła) sprawdzić `last_reset_date`; jeśli jest inny niż dziś, pokazać **jeden** spokojny ekran „Nowy dzień” — bez czerwieni, bez wyrzutów.
-2. Ekran pokazuje: zrobione wczoraj (ile pójdzie do Dziennika Sukcesów) i listę niezrobionych z Daily z wyborem: **„Zostaw na dziś”**, **„Wróć do Mastera”**, **„Usuń z Daily”**; plus akcje zbiorcze („wszystkie zostaw”, „wszystkie do Mastera”).
-3. „Koniec dnia” ma robić to samo, ale wywołane ręcznie; dodać opcję „Zamknij dzień i pokaż podsumowanie” (bez automatycznego kasowania zadań bez decyzji).
-4. Przed jakąkolwiek zmianą stanu zrobić snapshot (`make_local_snapshot("pre_day_rollover")`).
-5. Nowy klucz configu: `day_rollover_mode` = `ask` (domyślnie) / `auto_keep` / `auto_master`.
-6. Nie przenosić niezrobionych zadań do `completed_archive` — to archiwum sukcesów, nie kosz.
-
-**Kryteria akceptacji.**
-
-- Po zmianie daty przy starcie pojawia się ekran wyboru; anulowanie niczego nie zmienia.
-- Wybór „Zostaw na dziś” pozostawia `is_daily=1`; „Do Mastera” ustawia `is_daily=0`; „Usuń z Daily” też `is_daily=0`, ale bez usuwania zadania.
-- Zrobione zadania trafiają do archiwum dokładnie raz (bez duplikatów przy ponownym otwarciu ekranu).
-- Snapshot powstaje przed zmianą.
-
-**Testy.** Symuluj `last_reset_date` z przeszłości → UI pokazuje ekran; każdy wybór sprawdzony w bazie; powtórne uruchomienie nie duplikuje archiwum.
-
-### 2.2. Tryb „Co teraz?” (fokus na jednym zadaniu)
-
-`P1 · M · Status: pominięty (decyzja użytkownika, 1.6.26)` — nie implementować.
-
-**Problem.** Daily to lista: 3 × A, B, C, rutyny, przypomnienia, filtry. Dla osoby z ADHD lista sama w sobie jest źródłem paraliżu decyzyjnego. Aplikacja ma limit „A”, ale nie ma ekranu, który mówi: **to jedno zadanie, teraz, pierwszy krok, start**.
-
-**Co zrobić.**
-
-1. Przycisk „▶ Skup się” na karcie zadania (i duży przycisk na górze Daily: „Co teraz?” wybierający pierwsze niezrobione A).
-2. Pełnoekranowa nakładka (nowy dialog **na końcu** `page.overlay`): tytuł zadania, lista podkroków z zaznaczaniem, przycisk „Zaczynam” uruchamiający timer 5/15/25, przycisk „Zrobione” → automatycznie następne A albo spokojne „na dziś wystarczy”.
-3. Ukryć wszystko inne: brak sidebaru, brak liczników, brak kategorii. Jedno zadanie = jeden ekran.
-4. Po ukończeniu: krótki, konkretny komunikat („Zrobione. 12 minut. Dobra robota.”) — bez przesadnego entuzjazmu, który bywa irytujący.
-5. Dodać pole „pierwszy mikro-krok” w tworzeniu/edycji zadania (opcjonalne, jedna linia) i pokazywać je w trybie fokusu nad listą podkroków. Jeśli puste — podpowiedź „Co da się zrobić w 2 minuty?”.
-6. Timer w trybie fokusu korzysta z istniejącego stanu timera; sygnałem końca jest wibracja z 1.1 (jeśli wdrożona).
-
-**Kryteria akceptacji.**
-
-- Z Daily jednym kliknięciem wchodzi się w fokus na wybranym zadaniu.
-- Widoczne jest tylko jedno zadanie i jego podkroki.
-- „Zrobione” oznacza zadanie i proponuje następne; zamknięcie wraca do poprzedniego widoku bez utraty stanu.
-- Na mobile przycisk „Zaczynam” jest osiągalny kciukiem (dół ekranu).
-
-**Testy.** Otwarcie/zamknięcie nakładki; „Zrobione” ustawia `is_done=1`; następne A jest wybierane zgodnie z priorytetem; pusty stan (brak A) pokazuje komunikat, nie błąd.
-
-### 2.3. Inbox i 2-minutowy triage
-
-`P1 · M · Status: gotowe (1.6.26)`
-
-**Problem.** `save_quick_dump` (app_logic.py:2283) wrzuca każdą myśl od razu do Master jako priorytet B i kategorię „Ogólne”. Master puchnie, a użytkownik później nie wie, co jest ważne. Zrzut myśli ma być szybki, ale porządkowanie nie może się dziać w tym samym momencie.
-
-**Co zrobić.**
-
-1. Nowa kategoria systemowa „📥 Inbox” (bez zmiany schematu) — szybki zrzut trafia tam, `priority="C"`, `is_daily=False`.
-2. Osobna sekcja/ekran „Inbox (n)” z jedną kartą naraz i trzema decyzjami: priorytet (A/B/C), „na dziś / do Mastera”, termin (skróty Dziś/Jutro/Za tydzień/bez). Po decyzji karta znika, następna wchodzi.
-3. Wejście do Inboxu z badge’em liczby; jeśli Inbox pusty — chowamy sekcję.
-4. Nie zmieniać istniejącego `quick_dump` w sposób, który wymaga nowego okna przy każdym zapisie — ma zostać jedno pole i Enter.
-
-**Kryteria akceptacji.**
-
-- Zrzut trafia do „📥 Inbox” i nie zaśmieca Mastera.
-- Triage przenosi zadanie do wybranej kategorii/priorytetu i (opcjonalnie) na Daily.
-- Licznik Inboxu spada; pusty Inbox nie pokazuje pustej sekcji.
-
-**Testy.** Zrzut → kategoria Inbox; triage → poprawne pola; stare zadania z „Ogólne” nie są ruszane.
-
----
-
-## Sprint 3 — „Pamięć i refleksja”
-
-> **Stan (1.6.28):** sprint **gotowy** — wdrożone 3.1 (historia rutyn i miękkie serie), 3.2 (znaczniki czasu + filtr „Dawno nietknięte”) i 3.4 (szacowany czas). Krok **3.3 (tygodniowy przegląd i notatka sukcesu) został usunięty** decyzją użytkownika — nie implementuj go.
-
-**Cel:** aplikacja ma pamiętać, co się udało, pokazywać postęp bez presji i pomagać w wycenie czasu. To wspiera motywację i poczucie sprawczości, nie karze za przerwy.
-
-### 3.1. Historia rutyn i miękkie serie
-
-`P1 · M · Status: gotowe (1.6.28)`
-
-**Problem.** `routines.is_done` to pojedynczy boolean resetowany w `end_of_day_db()`. Po resecie nie ma śladu, że rutyna była robiona wczoraj, tydzień temu ani przez ostatni miesiąc. Nie da się pokazać „3 tygodnie z rzędu bierzesz leki” ani wychwycić, że rutyna wypadła z nawyku.
-
-**Co zrobić.**
-
-1. Tabela `routine_log(id INTEGER PRIMARY KEY, routine_id INTEGER, date TEXT, done INTEGER, UNIQUE(routine_id, date))` w `tasks.db`. Data ISO `YYYY-MM-DD`.
-2. `toggle_routine_db()` zapisuje wpis na dziś (done 1/0) zamiast tylko aktualizować `routines.is_done`; `is_done` zostaje jako szybki stan bieżący.
-3. `ensure_schema()` tworzy tabelę, `init_db()`/`ensure_schema_upgrade()` ją dopieszczają; eksport/import JSON przenosi historię (nowy klucz, wstecznie kompatybilny — brak klucza = pusta historia).
-4. `end_of_day_db()` **nie kasuje** historii; resetuje tylko `is_done`.
-5. UI: przy rutynie w Ustawieniach mały pasek 7 dni (zielone/szare kropki) i tekst „w tym tygodniu: 4/7”. Na Daily — bez zmiany, żeby nie zaśmiecać.
-6. Seria liczona jako „dni z rzędu, w których rutyna była zaplanowana i zrobiona”; przerwa w dzień, w który rutyna i tak nie wypada, nie przerywa serii. **Bez komunikatu „straciłeś serię”** — najwyżej „wróć do rytmu”.
-
-**Kryteria akceptacji.**
-
-- Po kilku dniach symulowanych zmian historia jest kompletna, mimo `end_of_day`.
-- Stara baza bez tabeli migruje się automatycznie i nie wywala widoku.
-- Eksport → import w nowej bazie odtwarza historię.
-- Rutyna codzienna i rutyna „wt/śr” liczą serię poprawnie.
-
-**Testy.** Migracja starej bazy; toggle w dwóch dniach; reset dnia nie czyści logu; JSON roundtrip; seria z przerwą w dzień niezaplanowany.
-
-### 3.2. `created_at` / `updated_at` i „zadania duchy”
-
-`P1 · M · Status: gotowe (1.6.27)`
-
-**Problem.** `tasks` nie ma żadnego znacznika czasu. Nie wiadomo, od kiedy zadanie leży w Masterze, ani kiedy ostatnio je ruszano. Przy ADHD Master z czasem staje się cmentarzyskiem, którego nikt nie chce otwierać.
-
-**Co zrobić.**
-
-1. ✅ Kolumny `created_at`, `updated_at` (ISO z sekundami) w `tasks`; migracja uzupełnia stare wiersze datą migracji (`_backfill_task_timestamps()`).
-2. ✅ `created_at` w `add_task_db()`, `updated_at` w każdej funkcji modyfikującej (pełna lista w sekcji „Dane”).
-3. ✅ Kolejność `get_tasks()` bez zmian; osobny getter `get_task_timestamps(task_id)`.
-4. ✅ Filtr Master „🕰 Dawno nietknięte (14+ dni)” (`get_stale_task_ids`, `is_stale_task`, przełącznik w config `master_stale_only`). **Cotygodniowy przegląd usunięty decyzją użytkownika** — tylko filtr.
-5. ⏳ `updated_at` wykorzysta sprint 4.4 do wykrywania konfliktów synchronizacji (poza zakresem 3.2).
-
-**Kryteria akceptacji.**
-
-- ✅ Nowe zadanie ma `created_at`; edycja podnosi `updated_at`; odhaczenie też.
-- ✅ Stare wiersze dostają sensowną datę migracji.
-- ✅ „Zadania duchy” nie pokazują zadań świeżych ani tych z przyszłym terminem (filtr pomija `is_done=1` i przyszłe terminy).
-
-**Testy.** `test_task_timestamps_created_and_updated`, `test_task_timestamps_migration_backfills_old_rows`, `test_stale_task_detection_rules`, `test_stale_task_ids_from_database`, `test_task_timestamps_json_export_import`, `test_ui_master_stale_filter_pill`.
-
-### 3.4. Szacowany czas i „time blindness”
-
-`P2 · M · Status: gotowe (1.6.28) — bez pkt 4 (brak ekranu tygodniowego; 3.3 usunięty)`
-
-**Problem.** Osoba z ADHD często nie wie, ile zajmie zadanie, i planuje dzień na 12 godzin. Aplikacja ma termin, ale nie ma pojęcia „ile to potrwa”.
-
-**Co zrobić.**
-
-1. Opcjonalne pole `estimate_min` (INTEGER, nullable) w `tasks`; wpisywane w dialogu dodawania/edycji jako 5/15/30/60 min lub własne.
-2. Na Daily pokazać sumę: „Zaplanowane: ~1 h 40 min” obok postępu.
-3. Przy starcie timera w trybie fokusu podpowiedzieć `estimate_min` jako domyślny preset.
-4. Po ukończeniu zapisać rzeczywisty czas (jeśli timer był użyty) i pokazać różnicę tylko w podsumowaniu tygodnia — bez oceniania.
-5. Nie dodawać wykresów na główny ekran; to ma być jedna liczba.
-
-**Kryteria akceptacji.** Zadanie z szacunkiem pokazuje czas; suma dnia aktualizuje się po zmianach; brak szacunku nie psuje sumy (traktowane jako 0, z informacją „bez szacunku: n”).
-
----
-
-## Sprint 4 — „Niezawodność i bezpieczeństwo”
-
-**Cel:** wyeliminować ciche utraty danych i losowe błędy UI, które najbardziej bolą, gdy użytkownik jest już przeciążony. Ten sprint nie dodaje widowiskowych funkcji — stabilizuje wszystko powyżej.
-
-### 4.1. Aktualizacje UI z jednego wątku + rozsądny refresh
-
-`P1 · M · Status: gotowe (1.7.0)`
-
-**Problem.** `on_sync_state()` (app_logic.py:2889) jest wywoływane z wątku synchronizacji (`set_sync_status` → callback) i ustawia kontrolki oraz `page.update()`. `timer_worker` robi to co 0,5 s. W tym samym czasie `refresh_view()` (app_logic.py:2989) podmienia całe `content_column.controls`. To wyścig, który może skończyć się losowym wyjątkiem albo „mrugnięciem” interfejsu. Dodatkowo `page.on_resize = lambda e: refresh_view()` (app_logic.py:4375) przebudowuje cały widok przy każdym pikselu zmiany rozmiaru, a część handlerów woła `refresh_view()` podwójnie (np. app_logic.py:3063, 3449).
-
-**Co zrobić.**
-
-1. Wprowadzić jeden punkt wejścia do UI: `schedule_ui_update(page, callback)` — kolejkuje aktualizację (koalescencja po równości callbacku) i wykonuje ją przez `page.run_thread`/`run_task` + lock; bez runnera (testy) woła od razu. Zamiast `page.update()` z każdego wątku. Dodatkowo `flush_ui_queue(page)` dopina zaległe aktualizacje przed podmianą UI przy OTA.
-2. `on_sync_state` i `update_timer_ui` mają tylko aktualizować wartości i kolejkować odświeżenie, nie wołać `page.update()` bezpośrednio.
-3. `on_resize`: przebudowa **tylko** gdy zmienia się próg `is_mobile()` (650 px), nie przy każdej zmianie szerokości (bez timera — wystarcza porównanie progu).
-4. Usunąć podwójne `refresh_view()` z handlerów; tam gdzie to możliwe, odświeżać tylko zmienioną sekcję (np. pasek postępu, listę zadań), nie całe drzewo.
-5. Zachować scroll i fokus pola szybkiego dodawania przy odświeżeniu (jeśli się da; jeśli nie — przynajmniej nie czyścić wartości).
-
-**Kryteria akceptacji.**
-
-- Symulacja: sync w tle + timer + refresh nie powoduje wyjątków.
-- Zmiana rozmiaru okna nie wywołuje dziesiątek przebudów (test licznika wywołań).
-- Wpisywany tekst w polu szybkiego dodawania nie znika przy odświeżeniu wywołanym synchronizacją.
-
-**Testy.** `DummyPage` z licznikiem `update()`; wątek wołający callback; resize 950→949→948 nie przebudowuje, 950→400 przebudowuje raz.
-
-### 4.2. Postęp dnia uwzględniający podkroki
-
-`P1 · S · Status: gotowe (1.7.0)`
-
-**Problem.** `calculate_progress_logic()` (app_logic.py:1732) liczy `total_points = len(tasks) + len(routines)`, a zadanie z podkrokami daje punkt na podstawie „aktywnego” podkroku, nie proporcji. Zadanie z 10 podkrokami waży tyle samo co jedno kliknięcie rutyny, a częściowe postępy są nieintuicyjne. To zaniża lub zawyża poczucie sprawczości.
-
-**Co zrobić.**
-
-1. Wybrać jedną, jasną formułę i udokumentować ją w AGENTS.md. Rekomendacja: punktacja hybrydowa — zadanie bez podkroków = 1 punkt; zadanie z podkrokami = 1 punkt × (ukończone podkroki / wszystkie), rutyna = 1 punkt. Dzięki temu pasek rośnie płynnie, ale ukończenie całości nadal jest wyraźne.
-2. Puste listy → 0%, bez dzielenia przez zero; gdy brak zadań i rutyn, ukryć pasek albo pokazać „Brak zadań na dziś”.
-3. Ujednolicić z etykietą „% ukończone”; nie pokazywać 100%, jeśli zostały niezrobione podkroki.
-4. Dodać testy skrajne: 0 elementów, samo rutyny, zadanie z 1/3 podkrokami, wszystko zrobione.
-
-**Kryteria akceptacji.** Postęp rośnie po każdym podkroku; 100% tylko gdy wszystko naprawdę zrobione; brak wyjątków dla pustych list.
-
-### 4.3. OTA: podpis, snapshot przed aktywacją, mniej duplikacji
-
-`P1 · M/L · Status: pominięty (decyzja użytkownika, 1.7.0)` — nie implementować podpisu ani `.sig` bez nowej decyzji.
-
-**Problem.** `check_and_download_ota()` w `main.py` używa `ssl._create_unverified_context()` (celowo, dla mobilnych środowisk), a jedyną weryfikacją pobranego kodu jest `compile()` — czyli składnia. Kod z GitHuba jest wykonywany z pełnym dostępem do bazy użytkownika. Rollback istnieje, ale pierwsze uruchomienie wadliwej wersji może już zmienić dane. Dodatkowo logika OTA jest zduplikowana w `main.py` i w `trigger_manual_ota()`/`install_ota_code()` (app_logic.py:2154, 855), więc obie ścieżki mogą się rozjechać.
-
-**Co zrobić.**
-
-1. **Podpis wydania.** Przygotować parę kluczy Ed25519; publikować obok `app_logic.py` plik `app_logic.py.sig`; klucz publiczny wbudować w kod. Weryfikować podpis przed zapisem i przed uruchomieniem. Ponieważ `main.py` jest zamrożony, pełna ochrona startu wymaga nowego APK; w `app_logic` zabezpieczyć przynajmniej ścieżkę ręczną i kolejne wersje.
-2. **Snapshot przed pierwszym uruchomieniem nowej wersji.** Na początku `main(page)` (przed `init_db()`) sprawdzić config `last_ota_run_version`; jeśli różni się od bieżącej wersji, zrobić `make_local_snapshot(f"pre_ota_{wersja}")` i zapisać nową wartość. Dzięki temu migracja lub błąd nowego kodu ma punkt powrotu.
-3. **Nie pobierać kodu po niezabezpieczonym TLS.** Najpierw próbować normalnej weryfikacji certyfikatów; fallback `unverified` tylko za zgodą użytkownika i z ostrzeżeniem w logu/UI. Jeśli to niemożliwe na Androidzie — przynajmniej podpis z pkt 1.
-4. **Wydania etapowe.** Dodać `channel` w configu (`stable`/`beta`) i numer `min_supported`; `beta` pobiera z gałęzi testowej. Domyślnie `stable`.
-5. **Jedna implementacja.** Wydzielić wspólne funkcje (`download_release`, `verify_release`, `install_release`) do `app_logic.py`; `main.py` może je wołać tylko po nowym APK, ale ręczna ścieżka i testy korzystają z jednego kodu.
-6. **Atomowość i kopie** już są — nie regresować (`_write_text_atomic`, `app_logic_ota.prev.py`, `ota_failed_version.txt`).
-7. **Testy:** podmieniony plik bez ważnego podpisu jest odrzucany; ważny przechodzi; snapshot powstaje przy zmianie wersji; `DISABLE_OTA=1` nadal omija sieć i cache.
-
-**Kryteria akceptacji.** Nie da się zainstalować przez OTA kodu bez poprawnego podpisu (przynajmniej w ścieżce ręcznej i nowych wersjach); pierwszy start nowej wersji zostawia snapshot; brak duplikatów logiki pobierania.
-
-**Ryzyka.** Podpisywanie wymaga dyscypliny przy każdym pushu na `master` (OTA działa z tej gałęzi!). Jeśli podpis nie zostanie wygenerowany, użytkownicy zostaną na starej wersji — to bezpieczne, ale trzeba to komunikować. Wdrożenie wymaga nowego APK z kluczem publicznym.
-
-### 4.4. Konflikty synchronizacji bez cichej utraty danych
-
-`P1 · L · Status: gotowe (1.7.0) — minimalny wariant (punkt 1); punkty 2–3 to przyszłość`
-
-**Problem.** Synchronizacja podmienia cały plik `tasks.db` i rozstrzyga „nowszy wygrywa” po `db_last_change`/`exported_at`/mtime. Dwa urządzenia offline → jedno nadpisze zmiany drugiego. Snapshot przed pullem istnieje, ale użytkownik nie dostaje żadnego sygnału, że coś zginęło. `app_config.db` (kategorie, limity, ustawienia przypomnień) w ogóle nie jest synchronizowany.
-
-**Co zrobić.**
-
-1. **Minimalny wariant (najpierw):** zapisywać `last_synced_hash` i `last_synced_at`; przy pullu sprawdzić, czy lokalna baza zmieniła się od ostatniej synchronizacji i czy zdalna też. Jeśli obie — nie nadpisywać automatycznie, tylko pokazać banner „Wykryto konflikt. Przywróć snapshot / nadpisz lokalnie / nadpisz zdalnie”.
-2. **Docelowy wariant:** eksport/import na poziomie rekordów z `updated_at` i `deleted_at` (tombstones), scalanie po `id` + znaczniku, konflikt pokazywany jako kopia „konflikt — wybierz wersję”. To duża zmiana; nie łączyć jej ze sprintem 3.
-3. **Config:** opcjonalnie synchronizować wybrane klucze (bez `gist_token`!) w osobnym pliku JSON, nie całą bazę configu.
-4. **Testy:** dwie bazy z różnymi zmianami od wspólnego stanu → brak cichego nadpisania, banner, oba stany odtwarzalne.
-
-**Kryteria akceptacji.** Żadna ścieżka pulla nie nadpisuje lokalnych zmian bez ostrzeżenia; użytkownik może wrócić do stanu sprzed konfliktu jednym kliknięciem; tokeny nie są wysyłane.
-
-### 4.5. Higiena testów, logów i dokumentacji
-
-`P2 · S · Status: gotowe (1.7.0) — punkty 1–3; punkt 4 (rozbicie pliku) nadal przyszłość`
-
-**Problem.** AGENTS.md już się rozjechał (52 testy, nie 42; ~4400 linii, nie 3800 — poprawione przy spisaniu planu). W kodzie jest sporo `except Exception: pass`, które ukrywają błędy migracji, dźwięku i UI. Brakuje testów na zachowania z tego planu.
-
-**Co zrobić.**
-
-1. Przejrzeć `except ...: pass` w `app_logic.py`; w miejscach krytycznych (migracje, backup, OTA, sync, UI) zamienić na log z kontekstem.
-2. Dodać testy regresyjne do każdej naprawy z tego planu (kategoria z Daily, resize, rollover, postęp, wibracje z mockiem).
-3. Zaktualizować AGENTS.md po każdym sprincie: nowe tabele, config keys, zmiany w `page.overlay`, nowe zależności.
-4. Rozważyć rozbicie `app_logic.py` na funkcje czyste (bez `page`) testowalne bez `DummyPage` — ale **nie w trakcie sprintu funkcjonalnego**; osobne zadanie, bo OTA wymaga jednego pliku.
 
 ---
 
@@ -500,10 +143,10 @@ Szybki zrzut myśli (`save_quick_dump` → Inbox), limit zadań „A” (`max_a_
 ## Definicja ukończenia (dla każdego zadania)
 
 - [ ] Kod w `app_logic.py` (lub nowym pliku) + brak zmian wymagających `main.py`, albo jasno opisane, że potrzebny jest APK.
-- [ ] Testy: nowe przypadki dopisane do `test_app.py` (jeden plik) + cały `pytest` zielony (108+).
+- [ ] Testy: nowe przypadki dopisane do `test_app.py` (jeden plik) + cały `pytest` zielony (109+).
 - [ ] Sprawdzone na PC (950 px) i mobile (400 px) — układ, dialogi, `page.overlay`.
 - [ ] Migracja schematu + eksport/import JSON, jeśli zmieniono dane.
 - [ ] `push_database_async()` w każdej nowej ścieżce zapisu.
 - [ ] Wersja podniesiona w `version.txt` i `FALLBACK_VERSION`.
-- [ ] AGENTS.md zaktualizowany (tabele, config, pułapki, ten plan — status sprintu).
+- [ ] Dokumentacja: docstring/komentarz w kodzie + aktualizacja `AGENTS.md` (tabele, config, pułapki, sekcje tematyczne) + `README.md`/`docs/` przy zmianach widocznych dla użytkownika + wpis w `docs/historia-zmian.md`.
 - [ ] Brak nowych cichych `except: pass`; błędy trafiają do `LOG`.

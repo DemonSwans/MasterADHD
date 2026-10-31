@@ -1,3 +1,4 @@
+import ast
 import base64
 import gc
 import json
@@ -2536,6 +2537,27 @@ def test_sync_conflict_banner_visible():
     main.main(page)
     content_col = _content_col(page)
     assert _control_contains_text(content_col, "Wykryto konflikt synchronizacji")
+
+
+def test_module_level_functions_have_docstrings():
+    """Higiena dokumentacji: kazda funkcja modulowa `app_logic.py` ma docstring.
+
+    Domkniecia wewnatrz `main()` (handlery zdarzen) sa celowo pomijane - maja
+    pozostac krotkie i oczywiste. Pilnujemy realnego API modulu, zeby nowa
+    funkcja nie pojawila sie bez opisania celu i kontraktu.
+    """
+    import app_logic
+
+    with open(app_logic.__file__, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    missing = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and not ast.get_docstring(node)
+    ]
+    assert missing == [], f"Brak docstringow w app_logic.py: {missing}"
+    assert ast.get_docstring(tree), "app_logic.py nie ma opisu modulu"
 
 
 if __name__ == "__main__":
