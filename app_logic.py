@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.26"
+FALLBACK_VERSION = "1.6.27"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -52,6 +52,16 @@ DAY_ROLLOVER_ASK = "ask"
 DAY_ROLLOVER_AUTO_KEEP = "auto_keep"
 DAY_ROLLOVER_AUTO_MASTER = "auto_master"
 DAY_ROLLOVER_MODES = (DAY_ROLLOVER_ASK, DAY_ROLLOVER_AUTO_KEEP, DAY_ROLLOVER_AUTO_MASTER)
+
+# --- SPRINT 3.2: znaczniki czasu i „zadania duchy” ---
+# Po ilu dniach bez zmian Master pokazuje zadanie jako „dawno nietknięte”.
+STALE_TASK_DAYS = 14
+
+
+def now_iso():
+    """Znacznik czasu ISO (sekundy) dla `tasks.created_at` / `tasks.updated_at`."""
+    return datetime.now().isoformat(timespec="seconds")
+
 
 # Jeden zamek na całą bazę. SQLite i tak serializuje zapisy, a dzięki temu
 # wątek synchronizacji nie walczy z UI o plik (koniec "database is locked").
@@ -1011,7 +1021,25 @@ def ensure_schema(conn):
     _ensure_column(conn, "tasks", "subtasks", "TEXT DEFAULT '[]'")
     _ensure_column(conn, "tasks", "category", "TEXT DEFAULT 'Ogólne'")
     _ensure_column(conn, "tasks", "deadline", "TEXT")
+    _ensure_column(conn, "tasks", "created_at", "TEXT")
+    _ensure_column(conn, "tasks", "updated_at", "TEXT")
     _ensure_column(conn, "routines", "routine_days", "TEXT DEFAULT '[]'")
+    _backfill_task_timestamps(conn)
+
+
+def _backfill_task_timestamps(conn):
+    """Wypełnia znaczniki czasu w wierszach sprzed migracji (3.2).
+
+    Stare zadania nie mają `created_at`/`updated_at`. Datę migracji ustawiamy na
+    „teraz” — nie znamy prawdziwej, a puste pole wyglądałoby jak zadanie-duch od
+    zawsze. Idempotentne: kolejne wywołania nie ruszają już wypełnionych wierszy.
+    """
+    try:
+        now = now_iso()
+        conn.execute("UPDATE tasks SET created_at = ? WHERE created_at IS NULL", (now,))
+        conn.execute("UPDATE tasks SET updated_at = ? WHERE updated_at IS NULL", (now,))
+    except sqlite3.Error as e:
+        LOG.warning("Migracja znaczników czasu zadań nie powiodła się: %s", e)
 
 
 def ensure_schema_upgrade(db_path=None):
@@ -1074,6 +1102,10 @@ def init_db():
                          DEFAULT
                          'Ogólne',
                          deadline
+                         TEXT,
+                         created_at
+                         TEXT,
+                         updated_at
                          TEXT
                      )
                      """)
@@ -1100,7 +1132,8 @@ def export_database_to_json_dict():
     with db_connection() as conn:
         ensure_schema(conn)
         tasks_rows = conn.execute(
-            "SELECT id, title, is_daily, is_done, priority, subtasks, category, deadline FROM tasks").fetchall()
+            "SELECT id, title, is_daily, is_done, priority, subtasks, category, deadline, "
+            "created_at, updated_at FROM tasks").fetchall()
         tasks = []
         for r in tasks_rows:
             try:
@@ -1115,7 +1148,9 @@ def export_database_to_json_dict():
                 "priority": r[4],
                 "subtasks": subs,
                 "category": r[6] if len(r) > 6 and r[6] else "Ogólne",
-                "deadline": (r[7] or "") if len(r) > 7 else ""
+                "deadline": (r[7] or "") if len(r) > 7 else "",
+                "created_at": (r[8] or "") if len(r) > 8 else "",
+                "updated_at": (r[9] or "") if len(r) > 9 else ""
             })
         routines_rows = conn.execute("SELECT id, title, is_done, routine_days FROM routines").fetchall()
         routines = [{"id": r[0], "title": r[1], "is_done": r[2], "days": _normalize_routine_days(r[3])} for r in routines_rows]
@@ -1165,13 +1200,16 @@ def import_database_from_json_dict(data, replace_existing=False):
             conn.execute("DELETE FROM routines")
             conn.execute("DELETE FROM completed_archive")
 
+        import_now = now_iso()
         for t in data.get("tasks", []):
+            created = (t.get("created_at") or "").strip() or import_now
+            updated = (t.get("updated_at") or "").strip() or created
             conn.execute(
-                "INSERT INTO tasks (title, is_daily, is_done, priority, subtasks, category, deadline) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks (title, is_daily, is_done, priority, subtasks, category, deadline, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (t.get("title", ""), int(t.get("is_daily", 0)), int(t.get("is_done", 0)),
                  t.get("priority", "B"), json.dumps(t.get("subtasks", []), ensure_ascii=False),
-                 t.get("category", "Ogólne"), normalize_deadline(t.get("deadline")))
+                 t.get("category", "Ogólne"), normalize_deadline(t.get("deadline")), created, updated)
             )
         for r in data.get("routines", []):
             conn.execute(
@@ -1517,6 +1555,67 @@ def filter_tasks_by_deadline(tasks, mode="ALL", today=None):
     return result
 
 
+# --- SPRINT 3.2: ZNACZNIKI CZASU I „ZADANIA DUCHY” ---
+def get_task_timestamps(task_id):
+    """Zwraca `(created_at, updated_at)` zadania albo None, gdy go nie ma.
+
+    Świadomie osobny getter: `get_tasks()` musi zachować dotychczasową kolejność
+    kolumn (indeksy 0..7 są kontraktem UI i testów).
+    """
+    try:
+        with db_connection() as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            return (row[0], row[1]) if row else None
+    except sqlite3.OperationalError:
+        ensure_schema_upgrade()
+        with db_connection() as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            return (row[0], row[1]) if row else None
+
+
+def is_stale_task(updated_at, deadline=None, is_done=0, days=STALE_TASK_DAYS, now=None):
+    """Czy zadanie jest „duchem”: dawno nietknięte i bez przyszłego terminu.
+
+    Świeże zadania i te z terminem w przyszłości nigdy nie są duchami — inaczej
+    filtr straszyłby rzeczami, które dopiero co powstały albo mają datę.
+    """
+    if is_done:
+        return False
+    reference = now or datetime.now()
+    if deadline:
+        try:
+            if date.fromisoformat(str(deadline)) > reference.date():
+                return False
+        except ValueError:
+            pass
+    if not updated_at:
+        return False
+    try:
+        updated = datetime.fromisoformat(str(updated_at))
+    except ValueError:
+        return False
+    return (reference - updated) >= timedelta(days=days)
+
+
+def get_stale_task_ids(days=STALE_TASK_DAYS, now=None):
+    """Id zadań, które leżą bez zmian co najmniej `days` dni (filtr Master)."""
+    reference = now or datetime.now()
+    try:
+        with db_connection() as conn:
+            rows = conn.execute("SELECT id, is_done, deadline, updated_at FROM tasks").fetchall()
+    except sqlite3.OperationalError as e:
+        LOG.warning("get_stale_task_ids: %s — domykam schemat bazy", e)
+        ensure_schema_upgrade()
+        with db_connection() as conn:
+            rows = conn.execute("SELECT id, is_done, deadline, updated_at FROM tasks").fetchall()
+    return {
+        tid for tid, is_done, deadline, updated_at in rows
+        if is_stale_task(updated_at, deadline=deadline, is_done=is_done, days=days, now=reference)
+    }
+
+
 def deadline_card_hidden_today(today=None):
     return get_config("deadline_card_hidden_date", "") == (today or date.today()).isoformat()
 
@@ -1608,8 +1707,8 @@ def delete_routine_db(routine_id):
 
 def update_subtasks_db(task_id, subtasks_list):
     with db_connection(write=True) as conn:
-        conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
-                     (json.dumps(subtasks_list, ensure_ascii=False), task_id))
+        conn.execute("UPDATE tasks SET subtasks = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(subtasks_list, ensure_ascii=False), now_iso(), task_id))
     push_database_async()
 
 
@@ -1628,12 +1727,13 @@ def count_daily_priority_a():
 
 def add_task_db(title, is_daily, priority="B", category="Ogólne", deadline=None):
     """Dodaje zadanie. `deadline` to opcjonalna data ISO (YYYY-MM-DD)."""
+    now = now_iso()
     with db_connection(write=True) as conn:
         ensure_schema(conn)
         conn.execute(
-            "INSERT INTO tasks (title, is_daily, priority, subtasks, category, deadline) "
-            "VALUES (?, ?, ?, '[]', ?, ?)",
-            (title.strip(), int(is_daily), priority, category, normalize_deadline(deadline)))
+            "INSERT INTO tasks (title, is_daily, priority, subtasks, category, deadline, "
+            "created_at, updated_at) VALUES (?, ?, ?, '[]', ?, ?, ?, ?)",
+            (title.strip(), int(is_daily), priority, category, normalize_deadline(deadline), now, now))
     push_database_async()
 
 
@@ -1655,7 +1755,8 @@ def set_task_deadline_db(task_id, deadline):
     value = normalize_deadline(deadline)
     with db_connection(write=True) as conn:
         ensure_schema(conn)
-        conn.execute("UPDATE tasks SET deadline = ? WHERE id = ?", (value, task_id))
+        conn.execute("UPDATE tasks SET deadline = ?, updated_at = ? WHERE id = ?",
+                     (value, now_iso(), task_id))
     push_database_async()
 
 
@@ -1666,39 +1767,46 @@ def update_task_details_db(task_id, title, category=None, deadline=DEADLINE_UNSE
     """
     title = (title or "").strip()
     new_deadline = None if deadline is DEADLINE_UNSET else normalize_deadline(deadline)
+    now = now_iso()
     with db_connection(write=True) as conn:
         ensure_schema(conn)
         if category:
-            conn.execute("UPDATE tasks SET title = ?, category = ? WHERE id = ?",
-                         (title, category, task_id))
+            conn.execute("UPDATE tasks SET title = ?, category = ?, updated_at = ? WHERE id = ?",
+                         (title, category, now, task_id))
         else:
-            conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (title, task_id))
+            conn.execute("UPDATE tasks SET title = ?, updated_at = ? WHERE id = ?",
+                         (title, now, task_id))
         if deadline is not DEADLINE_UNSET:
-            conn.execute("UPDATE tasks SET deadline = ? WHERE id = ?", (new_deadline, task_id))
+            conn.execute("UPDATE tasks SET deadline = ?, updated_at = ? WHERE id = ?",
+                         (new_deadline, now, task_id))
     push_database_async()
 
 
 def update_task_category_db(task_id, category):
     with db_connection(write=True) as conn:
-        conn.execute("UPDATE tasks SET category = ? WHERE id = ?", (category, task_id))
+        conn.execute("UPDATE tasks SET category = ?, updated_at = ? WHERE id = ?",
+                     (category, now_iso(), task_id))
     push_database_async()
 
 
 def toggle_done_db(task_id, is_done):
     with db_connection(write=True) as conn:
-        conn.execute("UPDATE tasks SET is_done = ? WHERE id = ?", (int(is_done), task_id))
+        conn.execute("UPDATE tasks SET is_done = ?, updated_at = ? WHERE id = ?",
+                     (int(is_done), now_iso(), task_id))
     push_database_async()
 
 
 def set_daily_db(task_id, is_daily):
     with db_connection(write=True) as conn:
-        conn.execute("UPDATE tasks SET is_daily = ? WHERE id = ?", (int(is_daily), task_id))
+        conn.execute("UPDATE tasks SET is_daily = ?, updated_at = ? WHERE id = ?",
+                     (int(is_daily), now_iso(), task_id))
     push_database_async()
 
 
 def update_priority_db(task_id, new_priority):
     with db_connection(write=True) as conn:
-        conn.execute("UPDATE tasks SET priority = ? WHERE id = ?", (new_priority, task_id))
+        conn.execute("UPDATE tasks SET priority = ?, updated_at = ? WHERE id = ?",
+                     (new_priority, now_iso(), task_id))
     push_database_async()
 
 
@@ -1743,11 +1851,13 @@ def restore_task_row_db(row):
     """
     if not row or len(row) < 8:
         return False
+    now = now_iso()
     with db_connection(write=True) as conn:
         ensure_schema(conn)
         cursor = conn.execute(
-            f"INSERT OR IGNORE INTO tasks ({TASK_ROW_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            tuple(row[:8]),
+            f"INSERT OR IGNORE INTO tasks ({TASK_ROW_COLUMNS}, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tuple(row[:8]) + (now, now),
         )
         inserted = cursor.rowcount > 0
     push_database_async()
@@ -1757,10 +1867,11 @@ def restore_task_row_db(row):
 def edit_task_title_db(task_id, new_title, new_category=None):
     with db_connection(write=True) as conn:
         if new_category:
-            conn.execute("UPDATE tasks SET title = ?, category = ? WHERE id = ?",
-                         (new_title.strip(), new_category, task_id))
+            conn.execute("UPDATE tasks SET title = ?, category = ?, updated_at = ? WHERE id = ?",
+                         (new_title.strip(), new_category, now_iso(), task_id))
         else:
-            conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (new_title.strip(), task_id))
+            conn.execute("UPDATE tasks SET title = ?, updated_at = ? WHERE id = ?",
+                         (new_title.strip(), now_iso(), task_id))
     push_database_async()
 
 
@@ -1777,8 +1888,8 @@ def delete_subtask_db(task_id, subtask_idx):
                 subtasks = []
             if 0 <= subtask_idx < len(subtasks):
                 removed = subtasks.pop(subtask_idx)
-                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
-                             (json.dumps(subtasks, ensure_ascii=False), task_id))
+                conn.execute("UPDATE tasks SET subtasks = ?, updated_at = ? WHERE id = ?",
+                             (json.dumps(subtasks, ensure_ascii=False), now_iso(), task_id))
     push_database_async()
     return removed
 
@@ -1807,8 +1918,8 @@ def restore_subtask_db(task_id, subtask_idx, subtask):
                     and int(existing.get("is_done", 0)) == int(subtask.get("is_done", 0))):
                 return False
         subtasks.insert(idx, subtask)
-        conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
-                     (json.dumps(subtasks, ensure_ascii=False), task_id))
+        conn.execute("UPDATE tasks SET subtasks = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(subtasks, ensure_ascii=False), now_iso(), task_id))
     push_database_async()
     return True
 
@@ -1820,8 +1931,8 @@ def edit_subtask_title_db(task_id, subtask_idx, new_title):
             subtasks = json.loads(row[0])
             if 0 <= subtask_idx < len(subtasks):
                 subtasks[subtask_idx]["title"] = new_title.strip()
-                conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
-                             (json.dumps(subtasks, ensure_ascii=False), task_id))
+                conn.execute("UPDATE tasks SET subtasks = ?, updated_at = ? WHERE id = ?",
+                             (json.dumps(subtasks, ensure_ascii=False), now_iso(), task_id))
     push_database_async()
 
 
@@ -1840,8 +1951,8 @@ def move_subtask_db(task_id, subtask_idx, delta):
         if not (0 <= subtask_idx < len(subtasks)) or not (0 <= target_idx < len(subtasks)):
             return None
         subtasks[subtask_idx], subtasks[target_idx] = subtasks[target_idx], subtasks[subtask_idx]
-        conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
-                     (json.dumps(subtasks, ensure_ascii=False), task_id))
+        conn.execute("UPDATE tasks SET subtasks = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(subtasks, ensure_ascii=False), now_iso(), task_id))
     push_database_async()
     return target_idx
 
@@ -1881,7 +1992,8 @@ def end_of_day_db(keep_archive=ARCHIVE_LIMIT):
                 (dt[0], dt[1], now_str)
             )
         conn.execute("DELETE FROM tasks WHERE is_done = 1")
-        conn.execute("UPDATE tasks SET is_daily = 0 WHERE is_daily = 1 AND is_done = 0")
+        conn.execute("UPDATE tasks SET is_daily = 0, updated_at = ? WHERE is_daily = 1 AND is_done = 0",
+                     (now_iso(),))
         conn.execute("UPDATE routines SET is_done = 0")
         conn.execute(
             "DELETE FROM completed_archive WHERE id NOT IN "
@@ -1964,7 +2076,8 @@ def apply_day_rollover(decisions=None, mode=None, today=None):
             if mode == DAY_ROLLOVER_AUTO_MASTER:
                 choice = "master"
             if choice in ("master", "remove"):
-                conn.execute("UPDATE tasks SET is_daily = 0 WHERE id = ?", (task_id,))
+                conn.execute("UPDATE tasks SET is_daily = 0, updated_at = ? WHERE id = ?",
+                             (now_iso(), task_id))
                 to_master += 1
             else:
                 kept += 1
@@ -1998,8 +2111,9 @@ def triage_inbox_task_db(task_id, category="Ogólne", priority="B", is_daily=Fal
     with db_connection(write=True) as conn:
         ensure_schema(conn)
         conn.execute(
-            "UPDATE tasks SET category = ?, priority = ?, is_daily = ?, deadline = ? WHERE id = ?",
-            (category, priority, int(bool(is_daily)), normalize_deadline(deadline), task_id)
+            "UPDATE tasks SET category = ?, priority = ?, is_daily = ?, deadline = ?, updated_at = ? "
+            "WHERE id = ?",
+            (category, priority, int(bool(is_daily)), normalize_deadline(deadline), now_iso(), task_id)
         )
     push_database_async()
 
@@ -2454,6 +2568,8 @@ def main(page: ft.Page):
     master_filter_category = "ALL"
     master_sort_mode = get_config("master_sort_mode", "DEFAULT") or "DEFAULT"
     master_deadline_filter = get_config("master_deadline_filter", "ALL") or "ALL"
+    # Sprint 3.2: filtr „Dawno nietknięte” (zadania-duchy) — zapamiętywany w configu.
+    master_stale_only = get_config("master_stale_only", "0") == "1"
 
     def set_search_query(q):
         nonlocal master_search_query
@@ -2470,6 +2586,12 @@ def main(page: ft.Page):
         nonlocal master_deadline_filter
         master_deadline_filter = mode
         set_config("master_deadline_filter", mode)
+        refresh_view()
+
+    def set_stale_only(value):
+        nonlocal master_stale_only
+        master_stale_only = bool(value)
+        set_config("master_stale_only", "1" if master_stale_only else "0")
         refresh_view()
 
     def set_filter_category(cat):
@@ -4372,6 +4494,9 @@ def main(page: ft.Page):
                     continue
 
                 filtered_tasks.append(t)
+            if master_stale_only:
+                stale_ids = get_stale_task_ids()
+                filtered_tasks = [t for t in filtered_tasks if t[0] in stale_ids]
             filtered_tasks = filter_tasks_by_deadline(filtered_tasks, master_deadline_filter)
             if master_sort_mode == "DEADLINE":
                 filtered_tasks = sort_tasks_by_deadline(filtered_tasks)
@@ -5007,6 +5132,17 @@ def main(page: ft.Page):
                     )
                 )
 
+            stale_pill = ft.Container(
+                content=ft.Text("🕰 Dawno nietknięte", size=11, weight=ft.FontWeight.BOLD,
+                                color=COLOR_TEXT_PRIMARY if master_stale_only else COLOR_TEXT_SECONDARY),
+                bgcolor="#8b5cf633" if master_stale_only else "#21262d",
+                border=ft.Border.all(1, COLOR_PRIO_C if master_stale_only else COLOR_BG_BORDER),
+                border_radius=8,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                tooltip=f"Zadania bez zmian od {STALE_TASK_DAYS}+ dni, bez przyszłego terminu",
+                on_click=lambda e: set_stale_only(not master_stale_only)
+            )
+
             filter_bar = ft.Container(
                 bgcolor=COLOR_BG_CARD,
                 border=ft.Border.all(1, COLOR_BG_BORDER),
@@ -5027,8 +5163,14 @@ def main(page: ft.Page):
                         ft.Row(deadline_pills, spacing=4),
                         ft.Container(width=8),
                         ft.Text("Sortuj:", size=11, color=COLOR_TEXT_SECONDARY),
-                        ft.Row(sort_pills, spacing=4)
-                    ], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+                        ft.Row(sort_pills, spacing=4),
+                        ft.Container(width=8),
+                        stale_pill
+                    ], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                    ft.Text(
+                        f"Pokazuję zadania bez zmian od co najmniej {STALE_TASK_DAYS} dni (bez przyszłego terminu).",
+                        size=11, color=COLOR_TEXT_SECONDARY, visible=master_stale_only
+                    )
                 ], spacing=8)
             )
             elements.append(filter_bar)

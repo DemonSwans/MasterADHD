@@ -5,7 +5,7 @@ import os
 import sqlite3
 import sys
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import pytest
 import flet as ft
 import main
@@ -1925,6 +1925,133 @@ def test_settings_day_rollover_card_sets_mode():
     assert pill is not None
     pill.on_click(None)
     assert main.get_day_rollover_mode() == main.DAY_ROLLOVER_AUTO_MASTER
+
+
+# --- 15. SPRINT 3.2: ZNACZNIKI CZASU I „ZADANIA DUCHY” ---
+def test_task_timestamps_created_and_updated():
+    main.add_task_db("Zegar", is_daily=0, priority="B")
+    task_id = main.get_tasks(is_daily_view=False)[0][0]
+    created, updated = main.get_task_timestamps(task_id)
+    assert created and updated
+    assert created == updated
+
+    # Starszy wiersz: cofamy updated_at ręcznie, akcja ma go podnieść.
+    with sqlite3.connect(main.LOCAL_DB) as conn:
+        conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?",
+                     ("2000-01-01T00:00:00", task_id))
+    main.toggle_done_db(task_id, 1)
+    created_after, bumped = main.get_task_timestamps(task_id)
+    assert bumped > "2000-01-01T00:00:00"
+    # created_at nie zmienia się przy edycji.
+    assert created_after == created
+
+    assert main.get_task_timestamps(999999) is None
+
+
+def test_task_timestamps_migration_backfills_old_rows(tmp_path, monkeypatch):
+    import app_logic
+    old_db = str(tmp_path / "stara_bez_czasu.db")
+    conn = sqlite3.connect(old_db)
+    conn.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+                 "is_daily INTEGER DEFAULT 0, is_done INTEGER DEFAULT 0, priority TEXT DEFAULT 'B', "
+                 "subtasks TEXT DEFAULT '[]', category TEXT DEFAULT 'Ogólne', deadline TEXT)")
+    conn.execute("CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+                 "is_done INTEGER DEFAULT 0, routine_days TEXT DEFAULT '[]')")
+    conn.execute("CREATE TABLE completed_archive (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, "
+                 "priority TEXT, completed_at TEXT)")
+    conn.execute("INSERT INTO tasks (title) VALUES ('Stare bez czasu')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+
+    assert main.ensure_schema_upgrade(old_db) is True
+    with sqlite3.connect(old_db) as check:
+        columns = [r[1] for r in check.execute("PRAGMA table_info(tasks)").fetchall()]
+    assert "created_at" in columns and "updated_at" in columns
+    created, updated = main.get_task_timestamps(main.get_tasks(is_daily_view=False)[0][0])
+    assert created and updated
+
+
+def test_stale_task_detection_rules():
+    now = datetime(2026, 10, 31, 12, 0, 0)
+    old = (now - timedelta(days=20)).isoformat(timespec="seconds")
+    fresh = (now - timedelta(days=2)).isoformat(timespec="seconds")
+    assert main.is_stale_task(old, now=now) is True
+    assert main.is_stale_task(fresh, now=now) is False
+    # Zrobione nigdy nie jest „duchem”.
+    assert main.is_stale_task(old, is_done=1, now=now) is False
+    # Przyszły termin wyklucza; zaległy nie.
+    assert main.is_stale_task(old, deadline="2026-12-01", now=now) is False
+    assert main.is_stale_task(old, deadline="2026-10-01", now=now) is True
+    # Brak znacznika = nie duch (bez danych nie straszymy).
+    assert main.is_stale_task(None, now=now) is False
+
+
+def test_stale_task_ids_from_database():
+    main.add_task_db("Świeże", is_daily=0, priority="B")
+    main.add_task_db("Duch", is_daily=0, priority="B")
+    main.add_task_db("Duch z terminem", is_daily=0, priority="B", deadline="2030-01-01")
+    ids = {t[1]: t[0] for t in main.get_tasks(is_daily_view=False)}
+    with sqlite3.connect(main.LOCAL_DB) as conn:
+        conn.execute("UPDATE tasks SET updated_at = ? WHERE id IN (?, ?)",
+                     ("2000-01-01T00:00:00", ids["Duch"], ids["Duch z terminem"]))
+
+    stale = main.get_stale_task_ids()
+    assert ids["Duch"] in stale
+    assert ids["Świeże"] not in stale
+    assert ids["Duch z terminem"] not in stale
+
+
+def test_task_timestamps_json_export_import(tmp_path, monkeypatch):
+    import app_logic
+    main.add_task_db("Z czasem", is_daily=0, priority="B")
+    exported = [t for t in main.export_database_to_json_dict()["tasks"] if t["title"] == "Z czasem"][0]
+    assert exported["created_at"] and exported["updated_at"]
+
+    data = main.export_database_to_json_dict()
+    # Stary backup bez znaczników importuje się i dostaje datę migracji.
+    data["tasks"].append({"title": "Stary backup", "is_daily": 0, "is_done": 0,
+                          "priority": "B", "subtasks": [], "category": "Ogólne"})
+    old_db = str(tmp_path / "import_czas.db")
+    monkeypatch.setattr(app_logic, "LOCAL_DB", old_db)
+    monkeypatch.setattr(main, "LOCAL_DB", old_db)
+    main.init_db()
+    main.import_database_from_json_dict(data, replace_existing=True)
+    imported = {t[1]: t[0] for t in main.get_tasks(is_daily_view=False)}
+    created, updated = main.get_task_timestamps(imported["Stary backup"])
+    assert created and updated
+
+
+def test_ui_master_stale_filter_pill():
+    main.add_task_db("Świeże", is_daily=0, priority="B")
+    main.add_task_db("Duch", is_daily=0, priority="B")
+    ids = {t[1]: t[0] for t in main.get_tasks(is_daily_view=False)}
+    with sqlite3.connect(main.LOCAL_DB) as conn:
+        conn.execute("UPDATE tasks SET updated_at = '2000-01-01T00:00:00' WHERE id = ?",
+                     (ids["Duch"],))
+
+    page = DummyPage(width=950)
+    main.main(page)
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    sidebar_col.controls[2].content.on_click(None)  # Master
+
+    content_col = root.content.controls[2].content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    texts = [c.value for c in _iter_controls(tasks_col) if isinstance(c, ft.Text)]
+    assert "Świeże" in texts and "Duch" in texts
+
+    pill = _find_clickable(page.controls[0], "Dawno nietknięte")
+    assert pill is not None
+    pill.on_click(None)
+    assert main.get_config("master_stale_only") == "1"
+
+    content_col = page.controls[0].content.content.controls[2].content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    texts = [c.value for c in _iter_controls(tasks_col) if isinstance(c, ft.Text)]
+    assert "Duch" in texts and "Świeże" not in texts
 
 
 if __name__ == "__main__":
