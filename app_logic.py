@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.23"
+FALLBACK_VERSION = "1.6.24"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -1228,10 +1228,81 @@ def play_sound_feedback(sound_type="task_done"):
             else:
                 # Android/iOS: brak modułu dźwiękowego w Flet — nie udajemy, że gra.
                 LOG.debug("Dźwięk %s pominięty na platformie %s", sound_type, sys.platform)
-        except Exception:
-            pass
+        except Exception as e:
+            LOG.debug("Dźwięk %s pominięty (błąd: %s)", sound_type, e)
 
     threading.Thread(target=_play, daemon=True).start()
+
+
+# --- WIBRACJA (tylko platformy mobilne, bez powiadomień systemowych) ---
+_HAPTIC_METHODS = {
+    "timer_done": "vibrate",
+    "task_done": "light_impact",
+    "undo": "selection_click",
+    "error": "heavy_impact",
+}
+
+
+def init_haptic_service(page):
+    """Dodaje `ft.HapticFeedback` do `page.services` na platformach mobilnych.
+
+    Flet 1.0.x w CI może nie mieć tej klasy — wtedy zwracamy None i aplikacja
+    działa jak dotąd. Brak wsparcia urządzenia nigdy nie może wywalić UI.
+    """
+    cls = getattr(ft, "HapticFeedback", None)
+    if cls is None or page is None:
+        return None
+    services = getattr(page, "services", None)
+    if not isinstance(services, list):
+        return None
+    platform = str(getattr(page, "platform", "") or "").lower()
+    # Pusty platform = stary Flet/DummyPage w testach; wtedy próbujemy mimo wszystko.
+    if platform and not any(k in platform for k in ("android", "ios", "mobile")):
+        return None
+    try:
+        service = cls()
+        services.append(service)
+        return service
+    except Exception as e:
+        LOG.debug("HapticFeedback niedostępny: %s", e)
+        return None
+
+
+def trigger_haptic_feedback(page, service, kind="task_done"):
+    """Krótka wibracja przez `page.run_task`. Cicha, gdy brak wsparcia."""
+    if page is None or service is None:
+        return False
+    if get_config("sound_enabled", "1") != "1":
+        return False
+    method_name = _HAPTIC_METHODS.get(kind, "light_impact")
+    method = getattr(service, method_name, None)
+    run_task = getattr(page, "run_task", None)
+    if method is None or not callable(run_task):
+        return False
+
+    async def _run():
+        try:
+            result = method()
+            if hasattr(result, "__await__"):
+                await result
+        except Exception as e:
+            LOG.debug("Wibracja %s pominięta: %s", kind, e)
+
+    try:
+        run_task(_run)
+        return True
+    except Exception as e:
+        LOG.debug("Nie udało się uruchomić wibracji %s: %s", kind, e)
+        return False
+
+
+def format_mmss(seconds):
+    """Formatuje sekundy do „mm:ss” (bez wartości ujemnych)."""
+    try:
+        total = max(0, int(seconds))
+    except (TypeError, ValueError):
+        total = 0
+    return f"{total // 60:02d}:{total % 60:02d}"
 
 
 def _select_tasks(conn, is_daily_view):
@@ -1628,6 +1699,52 @@ def delete_task_db(task_id):
     push_database_async()
 
 
+TASK_ROW_COLUMNS = "id, title, is_daily, is_done, priority, subtasks, category, deadline"
+
+
+def get_task_row(task_id):
+    """Pełny surowy wiersz zadania (subtasks jako JSON-tekst) — do cofnięcia usunięcia.
+
+    Zwraca krotkę zgodną z `TASK_ROW_COLUMNS` albo None, gdy zadania nie ma.
+    """
+    with db_connection() as conn:
+        row = conn.execute(
+            f"SELECT {TASK_ROW_COLUMNS} FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+    return row
+
+
+def delete_task_with_undo_db(task_id):
+    """Usuwa zadanie i zwraca jego pełny wiersz, żeby można je było przywrócić."""
+    row = get_task_row(task_id)
+    if row is None:
+        return None
+    with db_connection(write=True) as conn:
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    push_database_async()
+    return row
+
+
+def restore_task_row_db(row):
+    """Przywraca usunięte zadanie z tym samym `id`.
+
+    `INSERT OR IGNORE` sprawia, że powtórne cofnięcie (np. drugie kliknięcie)
+    nie duplikuje ani nie nadpisuje istniejącego rekordu. Zwraca True, gdy
+    wiersz faktycznie wrócił do bazy.
+    """
+    if not row or len(row) < 8:
+        return False
+    with db_connection(write=True) as conn:
+        ensure_schema(conn)
+        cursor = conn.execute(
+            f"INSERT OR IGNORE INTO tasks ({TASK_ROW_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            tuple(row[:8]),
+        )
+        inserted = cursor.rowcount > 0
+    push_database_async()
+    return inserted
+
+
 def edit_task_title_db(task_id, new_title, new_category=None):
     with db_connection(write=True) as conn:
         if new_category:
@@ -1639,15 +1756,52 @@ def edit_task_title_db(task_id, new_title, new_category=None):
 
 
 def delete_subtask_db(task_id, subtask_idx):
+    """Usuwa podkrok i zwraca go (do „Cofnij”). None, gdy nic nie usunięto."""
+    removed = None
     with db_connection(write=True) as conn:
         row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row and row[0]:
-            subtasks = json.loads(row[0])
+            try:
+                subtasks = json.loads(row[0])
+            except Exception as e:
+                LOG.warning("Nie udało się odczytać podkroków zadania %s: %s", task_id, e)
+                subtasks = []
             if 0 <= subtask_idx < len(subtasks):
-                subtasks.pop(subtask_idx)
+                removed = subtasks.pop(subtask_idx)
                 conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
                              (json.dumps(subtasks, ensure_ascii=False), task_id))
     push_database_async()
+    return removed
+
+
+def restore_subtask_db(task_id, subtask_idx, subtask):
+    """Wstawia usunięty podkrok z powrotem na tę samą pozycję (idempotentnie).
+
+    Jeśli na danej pozycji jest już identyczny podkrok (np. drugie kliknięcie
+    „Cofnij”), nic nie zmieniamy — bez duplikatów.
+    """
+    if not isinstance(subtask, dict) or not subtask.get("title"):
+        return False
+    with db_connection(write=True) as conn:
+        row = conn.execute("SELECT subtasks FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row:
+            return False
+        try:
+            subtasks = json.loads(row[0] or "[]")
+        except Exception:
+            subtasks = []
+        idx = max(0, min(int(subtask_idx), len(subtasks)))
+        if idx < len(subtasks):
+            existing = subtasks[idx]
+            if (isinstance(existing, dict)
+                    and existing.get("title") == subtask.get("title")
+                    and int(existing.get("is_done", 0)) == int(subtask.get("is_done", 0))):
+                return False
+        subtasks.insert(idx, subtask)
+        conn.execute("UPDATE tasks SET subtasks = ? WHERE id = ?",
+                     (json.dumps(subtasks, ensure_ascii=False), task_id))
+    push_database_async()
+    return True
 
 
 def edit_subtask_title_db(task_id, subtask_idx, new_title):
@@ -1772,6 +1926,36 @@ COLOR_TEXT_SECONDARY = "#8b949e"
 COLOR_SUN_ACTIVE = "#facc15"   # żółte (aktywne na daily)
 COLOR_SUN_INACTIVE = "#6b7280" # szare (nieaktywne)
 
+# Minimalny obszar klikalny palca (mobile). Na PC zachowujemy gęstość.
+TOUCH_TARGET_MIN = 44
+
+
+def _hex_to_rgb(color):
+    """Zamienia „#rrggbb”/„#rgb” na krotkę 0..1. Rzuca ValueError dla złego wejścia."""
+    value = str(color or "").strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    if len(value) != 6:
+        raise ValueError(f"Niepoprawny kolor: {color!r}")
+    return tuple(int(value[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def relative_luminance(color):
+    """Względna luminancja wg WCAG 2.1 (0 = czarny, 1 = biały)."""
+    def _channel(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = _hex_to_rgb(color)
+    return 0.2126 * _channel(r) + 0.7152 * _channel(g) + 0.0722 * _channel(b)
+
+
+def contrast_ratio(fg, bg):
+    """Kontrast WCAG dwóch kolorów (1..21). 4.5 = minimum dla zwykłego tekstu."""
+    l1 = relative_luminance(fg)
+    l2 = relative_luminance(bg)
+    hi, lo = max(l1, l2), min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+
 
 # --- DNI TYGODNIA DLA RUTYN (kotwica zgodna z Python weekday(): 0=poniedziałek ... 6=niedziela) ---
 WEEKDAY_LABELS = ["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"]
@@ -1860,6 +2044,9 @@ def main(page: ft.Page):
     
     init_db()
 
+    # Wibracja na telefonie (bez powiadomień systemowych). Brak wsparcia = None.
+    haptic_service = init_haptic_service(page)
+
     current_view = "daily"
     max_a_limit = int(get_config("max_a_limit", "3"))
     # Tryb dodawania do Daily: "drag" (przeciągnij) lub "tap" (kliknij słońce)
@@ -1945,6 +2132,55 @@ def main(page: ft.Page):
         on_click=lambda e: toggle_timer()
     )
 
+    # --- GLOBALNY MINI-MINUTNIK (wskaźnik widoczny w każdym widoku) ---
+    # Dwa lekkie wystąpienia (PC w sidebarze, mobile nad dolną nawigacją).
+    # Stan timera pozostaje jeden — to tylko wskaźnik klikalny do Daily.
+    def _mini_timer_go_daily(e=None):
+        try:
+            switch_view("daily")
+        except Exception as e:
+            LOG.debug("Nie udało się wrócić do Daily z mini-minutnika: %s", e)
+
+    def _build_mini_timer(key):
+        icon = ft.Icon(ft.Icons.TIMER_OUTLINED, size=15, color=COLOR_PRIO_B)
+        text = ft.Text("00:00", size=13, weight=ft.FontWeight.W_600, color=COLOR_TEXT_PRIMARY)
+        view = ft.Container(
+            key=key,
+            visible=False,
+            ink=True,
+            border_radius=8,
+            bgcolor=COLOR_BG_SURFACE,
+            padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+            tooltip="Minutnik skupienia — kliknij, aby wrócić do Daily",
+            on_click=_mini_timer_go_daily,
+            content=ft.Row([icon, text], spacing=6, tight=True,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        )
+        return icon, text, view
+
+    mini_timer_pc_icon, mini_timer_pc_text, mini_timer_pc = _build_mini_timer("mini_timer_pc")
+    mini_timer_mob_icon, mini_timer_mob_text, mini_timer_mob = _build_mini_timer("mini_timer_mobile")
+    mini_timer_icons = (mini_timer_pc_icon, mini_timer_mob_icon)
+    mini_timer_texts = (mini_timer_pc_text, mini_timer_mob_text)
+    mini_timer_views = (mini_timer_pc, mini_timer_mob)
+
+    def _mini_timer_should_show():
+        """Widoczny w trakcie odliczania, w pauzie z czasem i po zakończeniu."""
+        return bool(timer_running or timer_message or (0 < timer_seconds_left < timer_total_seconds))
+
+    def update_mini_timer():
+        value = format_mmss(timer_seconds_left)
+        color = COLOR_SUCCESS if timer_message else (
+            COLOR_PRIO_B if timer_running else COLOR_TEXT_PRIMARY)
+        for text_ctrl in mini_timer_texts:
+            text_ctrl.value = value
+            text_ctrl.color = color
+        for icon_ctrl in mini_timer_icons:
+            icon_ctrl.color = color
+        show = _mini_timer_should_show()
+        for view_ctrl in mini_timer_views:
+            view_ctrl.visible = show
+
     def update_timer_ui():
         mins = timer_seconds_left // 60
         secs = timer_seconds_left % 60
@@ -1965,6 +2201,7 @@ def main(page: ft.Page):
             else:
                 timer_msg_text.value = "🔥 25 minut: głębokie skupienie (Pomodoro)"
             timer_msg_text.color = COLOR_TEXT_SECONDARY
+        update_mini_timer()
         try:
             page.update()
         except Exception:
@@ -1986,6 +2223,7 @@ def main(page: ft.Page):
                     timer_message = "🎉 Brawo! Czas minął – paraliż pokonany!"
                 _persist_timer()
                 play_sound_feedback("timer_done")
+                trigger_haptic_feedback(page, haptic_service, "timer_done")
                 update_timer_ui()
                 break
             update_timer_ui()
@@ -2533,6 +2771,101 @@ def main(page: ft.Page):
         ]
     )
 
+    # --- „COFNIJ” ZAMIAST OKNA POTWIERDZENIA (tylko ostatnia akcja) ---
+    # Dialog usuwania zostaje w overlay[4] (kontrakt testów i operacje bezpośrednie),
+    # ale karty zadań usuwają natychmiast i pokazują SnackBar z „Cofnij”.
+    undo_state = {"token": 0, "callback": None, "snack": None}
+
+    def _short_title(title, limit=42):
+        text = (title or "").strip()
+        return text if len(text) <= limit else text[:limit - 1] + "…"
+
+    def _dismiss_undo_snackbar():
+        snack = undo_state.get("snack")
+        undo_state["snack"] = None
+        if snack is not None:
+            try:
+                snack.open = False
+            except Exception as e:
+                LOG.debug("Nie udało się zamknąć SnackBar: %s", e)
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def _show_undo_snackbar(message, callback):
+        """Pokazuje SnackBar „Cofnij” (~6 s). Token unieważnia stare akcje."""
+        undo_state["token"] = int(undo_state.get("token") or 0) + 1
+        token = undo_state["token"]
+        undo_state["callback"] = callback
+
+        def _on_dismiss(e=None):
+            # SnackBar zniknął sam — akcja staje się ostateczna.
+            if undo_state.get("token") == token:
+                undo_state["token"] = token + 1
+                undo_state["callback"] = None
+                undo_state["snack"] = None
+
+        def _undo(e=None):
+            if undo_state.get("token") != token or undo_state.get("callback") is None:
+                return
+            action = undo_state["callback"]
+            undo_state["callback"] = None
+            undo_state["token"] = token + 1
+            try:
+                action()
+            except Exception as ex:
+                LOG.exception("Nie udało się cofnąć akcji: %s", ex)
+                warning_text.value = "⚠️ Nie udało się cofnąć akcji"
+                try:
+                    refresh_view()
+                except Exception:
+                    pass
+            _dismiss_undo_snackbar()
+            trigger_haptic_feedback(page, haptic_service, "undo")
+
+        snack = ft.SnackBar(
+            content=ft.Text(message, size=13, color=COLOR_TEXT_PRIMARY),
+            action=ft.SnackBarAction(label="Cofnij", on_click=_undo),
+            duration=6000,
+            behavior=ft.SnackBarBehavior.FLOATING,
+            bgcolor=COLOR_BG_SURFACE,
+            margin=ft.Margin.only(left=12, right=12, bottom=112 if is_mobile() else 20),
+            on_dismiss=_on_dismiss,
+        )
+        undo_state["snack"] = snack
+        try:
+            shower = getattr(page, "show_dialog", None)
+            if callable(shower):
+                shower(snack)
+            else:
+                page.overlay.append(snack)
+                snack.open = True
+            page.update()
+        except Exception as e:
+            LOG.debug("Nie udało się pokazać SnackBar „Cofnij”: %s", e)
+
+    def delete_task_now(task_id, title):
+        """Natychmiast usuwa zadanie i daje jedno kliknięcie „Cofnij”."""
+        row = delete_task_with_undo_db(task_id)
+        active_subtask_idx_map.pop(task_id, None)
+        if row is None:
+            status_text.value = "⚠️ Nie znaleziono zadania"
+            warning_text.value = ""
+            refresh_view()
+            return
+        status_text.value = "✓ Usunięto zadanie"
+        warning_text.value = ""
+        refresh_view()
+
+        def undo():
+            restored = restore_task_row_db(row)
+            status_text.value = "✓ Przywrócono zadanie" if restored else "Zadanie już istniało"
+            warning_text.value = ""
+            refresh_view()
+
+        _show_undo_snackbar(f"Usunięto „{_short_title(title)}”", undo)
+
     edit_subtask_field = ft.TextField(
         hint_text="Treść kroku...",
         autofocus=True,
@@ -2574,16 +2907,32 @@ def main(page: ft.Page):
         ]
     )
 
-    def delete_subtask_action(task_id, subtask_idx, current_subtasks):
-        if 0 <= subtask_idx < len(current_subtasks):
-            current_subtasks.pop(subtask_idx)
-            update_subtasks_db(task_id, current_subtasks)
-            if task_id in active_subtask_idx_map:
-                if active_subtask_idx_map[task_id] >= len(current_subtasks):
-                    active_subtask_idx_map[task_id] = max(0, len(current_subtasks) - 1)
-            status_text.value = "✓ Usunięto krok"
+    def delete_subtask_now(task_id, subtask_idx):
+        """Natychmiast usuwa krok i pozwala go cofnąć jednym kliknięciem."""
+        removed = delete_subtask_db(task_id, subtask_idx)
+        if removed is None:
+            status_text.value = "⚠️ Nie znaleziono kroku"
             warning_text.value = ""
             refresh_view()
+            return
+        row = get_task_row(task_id)
+        try:
+            remaining = len(json.loads(row[5] or "[]")) if row else 0
+        except Exception:
+            remaining = 0
+        if task_id in active_subtask_idx_map and active_subtask_idx_map[task_id] >= remaining:
+            active_subtask_idx_map[task_id] = max(0, remaining - 1)
+        status_text.value = "✓ Usunięto krok"
+        warning_text.value = ""
+        refresh_view()
+
+        def undo():
+            restored = restore_subtask_db(task_id, subtask_idx, removed)
+            status_text.value = "✓ Przywrócono krok" if restored else "Krok już był na liście"
+            warning_text.value = ""
+            refresh_view()
+
+        _show_undo_snackbar(f"Usunięto krok „{_short_title(removed.get('title', ''))}”", undo)
 
     def move_subtask_action(task_id, subtask_idx, delta):
         """Przesuwa krok w górę/dół i pilnuje, żeby Daily wskazywał ten sam krok."""
@@ -2925,7 +3274,8 @@ def main(page: ft.Page):
             daily_pc_target,
             master_pc_target,
             archive_pc_box,
-            ft.Container(expand=True),
+            # Elastyczna przestrzeń: mini-minutnik tuż nad numerem wersji.
+            ft.Container(expand=True, content=mini_timer_pc, alignment=ft.Alignment(0, 1)),
             version_badge,
             sync_badge,
             ft.Divider(height=1, color=COLOR_BG_BORDER),
@@ -2939,6 +3289,14 @@ def main(page: ft.Page):
         border=ft.Border(top=ft.BorderSide(1, COLOR_BG_BORDER)),
         content=ft.Row([daily_mob_target, master_mob_target, archive_mob_box, settings_mob_box],
                        alignment=ft.MainAxisAlignment.SPACE_AROUND)
+    )
+
+    # Cienki pasek mini-minutnika nad dolną nawigacją (mobile). Trzymany jako
+    # jeden kontroler, żeby nie przesuwać indeksów `root_layout.controls`
+    # (testy: [0] content_area, [2] bottom_nav).
+    mini_timer_mob_wrapper = ft.Column(
+        [ft.Divider(height=1, color=ft.Colors.GREY_800), mini_timer_mob],
+        spacing=0, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER
     )
 
     content_column = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
@@ -2964,6 +3322,7 @@ def main(page: ft.Page):
     def handle_task_check(task_id, is_checked, subtask_idx, subtasks):
         if is_checked:
             play_sound_feedback("task_done")
+            trigger_haptic_feedback(page, haptic_service, "task_done")
         if subtask_idx is not None:
             subtasks[subtask_idx]["is_done"] = 1 if is_checked else 0
             update_subtasks_db(task_id, subtasks)
@@ -2973,6 +3332,14 @@ def main(page: ft.Page):
                 toggle_done_db(task_id, 0)
         else:
             toggle_done_db(task_id, 1 if is_checked else 0)
+        refresh_view()
+
+    def handle_routine_toggle(routine_id, is_done):
+        """Zaznaczenie rutyny = krótka wibracja/dźwięk, odznaczenie = cicho."""
+        toggle_routine_db(routine_id, is_done)
+        if is_done:
+            play_sound_feedback("task_done")
+            trigger_haptic_feedback(page, haptic_service, "task_done")
         refresh_view()
 
     def next_subtask(task_id):
@@ -2989,6 +3356,7 @@ def main(page: ft.Page):
     def refresh_view():
         mob = is_mobile()
         content_area.padding = 14 if mob else 25
+        update_mini_timer()
 
         daily_all = get_tasks(is_daily_view=True)
         master_all = get_tasks(is_daily_view=False)
@@ -3036,7 +3404,7 @@ def main(page: ft.Page):
             sync_badge_icon.color = COLOR_PRIO_A
 
         if mob:
-            root_layout.content = ft.Column([content_area, ft.Divider(height=1, color=ft.Colors.GREY_800), bottom_nav],
+            root_layout.content = ft.Column([content_area, mini_timer_mob_wrapper, bottom_nav],
                                             expand=True, spacing=0)
         else:
             root_layout.content = ft.Row([sidebar, ft.VerticalDivider(width=1, color=ft.Colors.GREY_800), content_area],
@@ -3444,18 +3812,24 @@ def main(page: ft.Page):
                     ft.Container(
                         bgcolor="#10b98122" if is_r_done else COLOR_BG_SURFACE,
                         border=ft.Border.all(1, COLOR_SUCCESS if is_r_done else COLOR_BG_BORDER),
-                        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                        padding=ft.Padding.symmetric(horizontal=10 if mob else 10,
+                                                     vertical=10 if mob else 6),
                         border_radius=14,
-                        on_click=lambda e, rid=rid, cdone=cdone: (toggle_routine_db(rid, not cdone), refresh_view()),
+                        height=TOUCH_TARGET_MIN if mob else None,
+                        on_click=lambda e, rid=rid, cdone=cdone: handle_routine_toggle(rid, not cdone),
                         content=ft.Row([
-                            ft.Icon(ft.Icons.CHECK_CIRCLE if is_r_done else ft.Icons.RADIO_BUTTON_UNCHECKED, size=15,
+                            ft.Icon(ft.Icons.CHECK_CIRCLE if is_r_done else ft.Icons.RADIO_BUTTON_UNCHECKED,
+                                    size=18 if mob else 15,
                                     color=COLOR_SUCCESS if is_r_done else COLOR_TEXT_SECONDARY),
-                            ft.Text(rname, size=12, color=COLOR_TEXT_PRIMARY if is_r_done else COLOR_TEXT_SECONDARY,
+                            ft.Text(rname, size=14 if mob else 12,
+                                    color=COLOR_TEXT_PRIMARY if is_r_done else COLOR_TEXT_SECONDARY,
                                     weight=ft.FontWeight.W_500,
                                     style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_r_done else None)),
-                            ft.Text(routine_days_label(rdays), size=10, color=COLOR_PRIO_C, weight=ft.FontWeight.W_500,
+                            ft.Text(routine_days_label(rdays), size=12 if mob else 10,
+                                    color=COLOR_PRIO_C, weight=ft.FontWeight.W_500,
                                     style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_r_done else None)) if rdays else ft.Container()
-                        ], spacing=6, tight=True)
+                        ], spacing=6, tight=True,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER)
                     )
                 )
 
@@ -3542,14 +3916,14 @@ def main(page: ft.Page):
                     chip_color, chip_border = COLOR_TEXT_SECONDARY, COLOR_BG_BORDER
                 deadline_chip = ft.Container(
                     content=ft.Row([
-                        ft.Icon(ft.Icons.EVENT_OUTLINED, size=13, color=chip_color),
-                        ft.Text(deadline_chip_text(task_deadline), size=10, color=chip_color,
+                        ft.Icon(ft.Icons.EVENT_OUTLINED, size=14 if mob else 13, color=chip_color),
+                        ft.Text(deadline_chip_text(task_deadline), size=12 if mob else 10, color=chip_color,
                                 weight=ft.FontWeight.W_500),
                     ], spacing=4, tight=True),
                     bgcolor="#ef444418" if urgency == "overdue" else "#f59e0b14" if urgency in ("today", "soon") else "#21262d66",
                     border=ft.Border.all(1, chip_border),
                     border_radius=6,
-                    padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=4 if mob else 2),
                     tooltip=f"Termin: {format_deadline_pl(task_deadline)} (kliknij, aby zmienić)",
                     on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(
                         tid, tit, current_category=cat)
@@ -3576,9 +3950,10 @@ def main(page: ft.Page):
                         ))
 
             # Ergonomiczny uchwyt przeciągania / słońce Daily
-            handle_w = 34 if mob else 30
+            handle_w = TOUCH_TARGET_MIN if mob else 30
+            handle_h = TOUCH_TARGET_MIN if mob else 34
             sun_color = COLOR_SUN_ACTIVE if is_daily else COLOR_SUN_INACTIVE
-            sun_icon = ft.Icon(ft.Icons.WB_SUNNY, size=18, color=sun_color)
+            sun_icon = ft.Icon(ft.Icons.WB_SUNNY, size=20 if mob else 18, color=sun_color)
             
             if daily_add_mode == "tap":
                 # Tryb TAP: kliknięcie słońca przełącza is_daily
@@ -3598,7 +3973,7 @@ def main(page: ft.Page):
                 
                 drag_handle = ft.Container(
                     content=sun_icon,
-                    width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8,
+                    width=handle_w, height=handle_h, bgcolor=COLOR_BG_SURFACE, border_radius=8,
                     alignment=ft.Alignment.CENTER,
                     tooltip="Kliknij, aby dodać/usunąć z Daily" if not is_daily else "Kliknij, aby usunąć z Daily",
                     on_click=toggle_daily_on_tap,
@@ -3611,12 +3986,12 @@ def main(page: ft.Page):
                     data=str(task_id),
                     content=ft.Container(
                         content=sun_icon,
-                        width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8,
+                        width=handle_w, height=handle_h, bgcolor=COLOR_BG_SURFACE, border_radius=8,
                         alignment=ft.Alignment.CENTER,
                         tooltip="Przeciągnij na Daily/Master"
                     ),
                     content_when_dragging=ft.Container(
-                        width=handle_w, height=34, bgcolor=COLOR_BG_SURFACE, border_radius=8, opacity=0.3
+                        width=handle_w, height=handle_h, bgcolor=COLOR_BG_SURFACE, border_radius=8, opacity=0.3
                     ),
                     content_feedback=ft.Container(
                         padding=ft.Padding.symmetric(horizontal=14, vertical=10),
@@ -3657,7 +4032,7 @@ def main(page: ft.Page):
                         tooltip="Edytuj zadanie",
                         width=28,
                         height=28,
-                        on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
+                        on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(tid, tit, current_category=cat)
                     )
                     del_btn = ft.IconButton(
                         icon=ft.Icons.DELETE_OUTLINE,
@@ -3666,7 +4041,7 @@ def main(page: ft.Page):
                         tooltip="Usuń zadanie",
                         width=28,
                         height=28,
-                        on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
+                        on_click=lambda e, tid=task_id, tit=title: delete_task_now(tid, tit)
                     )
 
                     step_checkbox = ft.Checkbox(
@@ -3782,7 +4157,7 @@ def main(page: ft.Page):
                         tooltip="Edytuj zadanie",
                         width=28,
                         height=28,
-                        on_click=lambda e, tid=task_id, tit=title: open_edit_task_dialog(tid, tit)
+                        on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(tid, tit, current_category=cat)
                     )
                     del_btn = ft.IconButton(
                         icon=ft.Icons.DELETE_OUTLINE,
@@ -3791,7 +4166,7 @@ def main(page: ft.Page):
                         tooltip="Usuń zadanie",
                         width=28,
                         height=28,
-                        on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
+                        on_click=lambda e, tid=task_id, tit=title: delete_task_now(tid, tit)
                     )
                     chk = ft.Checkbox(
                         value=task_done,
@@ -3869,7 +4244,7 @@ def main(page: ft.Page):
                     tooltip="Usuń zadanie",
                     width=28,
                     height=28,
-                    on_click=lambda e, tid=task_id, tit=title: open_delete_task_dialog(tid, tit)
+                    on_click=lambda e, tid=task_id, tit=title: delete_task_now(tid, tit)
                 )
                 chk = ft.Checkbox(
                     value=task_done,
@@ -3977,7 +4352,7 @@ def main(page: ft.Page):
                                         tooltip="Usuń krok",
                                         width=26,
                                         height=26,
-                                        on_click=lambda e, tid=task_id, i=idx, subs=subtasks: delete_subtask_action(tid, i, subs)
+                                        on_click=lambda e, tid=task_id, i=idx: delete_subtask_now(tid, i)
                                     )
                                 ],
                                 vertical_alignment=ft.CrossAxisAlignment.CENTER,

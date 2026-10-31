@@ -520,14 +520,181 @@ def test_ui_edit_delete_dialogs():
     assert edit_task_dialog.open is False
     assert main.get_tasks(is_daily_view=True)[0][1] == "Zadanie Przemianowane"
 
-    # 2. Usunięcie zadania przez dialog
+    # 2. Usunięcie zadania z karty: natychmiast + SnackBar „Cofnij”
+    #    Dialog w overlay[4] zostaje (kontrakt testów), ale karty go nie otwierają.
     card_after_edit = tasks_col.controls[0]
     del_btn = card_after_edit.content.controls[3]
     del_btn.on_click(None)
-    assert delete_task_dialog.open is True
-    delete_task_dialog.actions[1].on_click(None)
     assert delete_task_dialog.open is False
     assert len(main.get_tasks(is_daily_view=True)) == 0
+
+    snack = page.overlay[-1]
+    assert isinstance(snack, ft.SnackBar)
+    assert snack.action.label == "Cofnij"
+    snack.action.on_click(None)
+    restored = main.get_tasks(is_daily_view=True)
+    assert len(restored) == 1
+    assert restored[0][0] == task_id
+    assert restored[0][1] == "Zadanie Przemianowane"
+
+    # Drugie kliknięcie „Cofnij” nie duplikuje rekordu.
+    snack.action.on_click(None)
+    assert len(main.get_tasks(is_daily_view=True)) == 1
+
+
+def _ui_tasks_column(page):
+    """Kolumna kart z aktualnie wyświetlanego widoku (PC)."""
+    root = page.controls[0].content
+    content_col = root.content.controls[2].content
+    return [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+
+
+def test_ui_edit_task_from_daily_keeps_category():
+    """Daily (gałąź z podkrokami) nie może nadpisać kategorii przy zapisie."""
+    main.add_task_db("Zadanie z kategorią", is_daily=1, priority="A", category="💼 Praca")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+    main.update_subtasks_db(task_id, [{"title": "Krok 1", "is_done": 0}])
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    card = _ui_tasks_column(page).controls[0]
+    edit_btn = card.content.controls[2]  # Daily subtask branch
+    edit_btn.on_click(None)
+
+    edit_task_dialog = page.overlay[3]
+    assert edit_task_dialog.open is True
+    dropdown = edit_task_dialog.content.controls[1]
+    assert dropdown.value == "💼 Praca"
+
+    # Zapis bez zmian treści i kategorii.
+    edit_task_dialog.actions[1].on_click(None)
+    row = main.get_tasks(is_daily_view=True)[0]
+    assert row[0] == task_id
+    assert row[6] == "💼 Praca"
+
+
+def test_ui_edit_task_from_daily_without_subtasks_keeps_category():
+    """Daily (gałąź bez podkroków) też musi przekazać kategorię do dialogu."""
+    main.add_task_db("Zadanie bez kroków", is_daily=1, priority="A", category="🏠 Dom")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    card = _ui_tasks_column(page).controls[0]
+    edit_btn = card.content.controls[3]  # Daily non-subtask branch
+    edit_btn.on_click(None)
+
+    edit_task_dialog = page.overlay[3]
+    assert edit_task_dialog.open is True
+    assert edit_task_dialog.content.controls[1].value == "🏠 Dom"
+
+    edit_task_dialog.actions[1].on_click(None)
+    row = main.get_tasks(is_daily_view=True)[0]
+    assert row[0] == task_id
+    assert row[6] == "🏠 Dom"
+
+
+def test_ui_delete_task_now_undo_restores_fields():
+    """Karta Daily usuwa od razu, a „Cofnij” przywraca pełny rekord."""
+    main.add_task_db("Do usunięcia", is_daily=1, priority="A", category="💼 Praca",
+                     deadline="2026-12-31")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    card = _ui_tasks_column(page).controls[0]
+    del_btn = card.content.controls[4]  # Daily non-subtask branch
+    del_btn.on_click(None)
+
+    assert len(main.get_tasks(is_daily_view=True)) == 0
+    snack = page.overlay[-1]
+    assert isinstance(snack, ft.SnackBar)
+    assert snack.action.label == "Cofnij"
+    assert snack.duration == 6000
+
+    snack.action.on_click(None)
+    rows = main.get_tasks(is_daily_view=True)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row[0] == task_id
+    assert row[1] == "Do usunięcia"
+    assert row[2] == 1
+    assert row[4] == "A"
+    assert row[6] == "💼 Praca"
+    assert row[7] == "2026-12-31"
+
+    # Powtórne „Cofnij” nie duplikuje rekordu.
+    snack.action.on_click(None)
+    assert len(main.get_tasks(is_daily_view=True)) == 1
+
+
+def test_ui_delete_subtask_now_undo_restores_position():
+    """Usunięcie kroku na karcie Master + „Cofnij” przywraca go na tę samą pozycję."""
+    main.add_task_db("Z krokami", is_daily=0, priority="A", category="Ogólne")
+    task_id = main.get_tasks(is_daily_view=False)[0][0]
+    main.update_subtasks_db(task_id, [
+        {"title": "Krok 1", "is_done": 0},
+        {"title": "Krok 2", "is_done": 1},
+    ])
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    # Przełącz na Master: sidebar[2].
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    sidebar_col.controls[2].content.on_click(None)
+
+    card = _ui_tasks_column(page).controls[0]
+    assert isinstance(card.content, ft.Column)
+    subtask_row = card.content.controls[1].content
+    close_btn = subtask_row.controls[5]
+    close_btn.on_click(None)
+
+    subs = json.loads(main.get_task_row(task_id)[5])
+    assert [s["title"] for s in subs] == ["Krok 2"]
+
+    snack = page.overlay[-1]
+    assert isinstance(snack, ft.SnackBar)
+    snack.action.on_click(None)
+
+    subs = json.loads(main.get_task_row(task_id)[5])
+    assert [s["title"] for s in subs] == ["Krok 1", "Krok 2"]
+    assert subs[1]["is_done"] == 1
+
+    # Powtórne „Cofnij” nie duplikuje kroku.
+    snack.action.on_click(None)
+    assert len(json.loads(main.get_task_row(task_id)[5])) == 2
+
+
+def test_ui_master_delete_task_now_undo():
+    """Karta Master usuwa od razu i pozwala przywrócić zadanie."""
+    main.add_task_db("Master do usunięcia", is_daily=0, priority="A", category="Ogólne")
+    task_id = main.get_tasks(is_daily_view=False)[0][0]
+
+    page = DummyPage(width=950)
+    main.main(page)
+
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    sidebar_col.controls[2].content.on_click(None)
+
+    card = _ui_tasks_column(page).controls[0]
+    del_btn = card.content.controls[0].controls[5]  # prio, chk, title, krok, edit, del, drag
+    del_btn.on_click(None)
+
+    assert len(main.get_tasks(is_daily_view=False)) == 0
+    snack = page.overlay[-1]
+    assert isinstance(snack, ft.SnackBar)
+
+    snack.action.on_click(None)
+    rows = main.get_tasks(is_daily_view=False)
+    assert len(rows) == 1
+    assert rows[0][0] == task_id
+    assert rows[0][1] == "Master do usunięcia"
 
 
 def test_mobile_task_card_layout_and_actions():

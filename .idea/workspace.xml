@@ -4,8 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Remove obsolete server_sync.py and add AGENTS.md project documentation">
-      <change beforePath="$PROJECT_DIR$/.idea/MasterADHD.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/MasterADHD.iml" afterDir="false" />
+    <list default="true" id="ef2033a9-8495-4cf4-bedc-cd1bf02557d2" name="Changes" comment="Add routine weekday scheduling and edit dialog, bump version to 1.6.21">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/AGENTS.md" beforeDir="false" afterPath="$PROJECT_DIR$/AGENTS.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/app_logic.py" afterDir="false" />
@@ -18,7 +17,8 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="24" />
+    <option name="cachedIndexableFilesCount" value="18" />
+    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
@@ -54,61 +54,61 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.6671484654541495" />
-      <entry key="MS500" value="4.8081059876554" />
-      <entry key="S2" value="12.057153925823991" />
-      <entry key="S5" value="18.608964164412043" />
-      <entry key="S10" value="26.231290436433056" />
-      <entry key="S30" value="47.92362094692374" />
-      <entry key="S60" value="69.22743619183815" />
-      <entry key="M2" value="93.59092818827958" />
-      <entry key="M5" value="130.39280035908976" />
-      <entry key="M10" value="183.34102172741098" />
-      <entry key="M15" value="236.8987292417993" />
-      <entry key="M30" value="437.792949895369" />
-      <entry key="H1" value="848.0892731631221" />
-      <entry key="H2" value="1409.0098990645074" />
-      <entry key="H4" value="2033.6971422882432" />
-      <entry key="D1" value="4769.0712155194105" />
-      <entry key="W1" value="7029.4118728884505" />
+      <entry key="MS100" value="1.0000004066316004" />
+      <entry key="MS500" value="1.0663830988413785" />
+      <entry key="S2" value="2.106335906875893" />
+      <entry key="S5" value="5.663479963016658" />
+      <entry key="S10" value="16.125919477599503" />
+      <entry key="S30" value="43.60546821579595" />
+      <entry key="S60" value="57.64787931197811" />
+      <entry key="M2" value="66.54335358380301" />
+      <entry key="M5" value="72.85700886471263" />
+      <entry key="M10" value="78.55247955817764" />
+      <entry key="M15" value="86.00386453819112" />
+      <entry key="M30" value="117.25628668649819" />
+      <entry key="H1" value="206.20931362201327" />
+      <entry key="H2" value="488.0959128806652" />
+      <entry key="H4" value="1182.5638568683153" />
+      <entry key="D1" value="4825.051998335416" />
+      <entry key="W1" value="7833.815355191431" />
     </decayedCancelled>
     <decayedSelected>
-      <entry key="MS100" value="3.218536309169082E-50" />
-      <entry key="MS500" value="1.2633732658366287E-10" />
-      <entry key="S2" value="0.0033526091089396263" />
-      <entry key="S5" value="0.10236539539175722" />
-      <entry key="S10" value="0.3199459257308292" />
-      <entry key="S30" value="0.6839518491261037" />
-      <entry key="S60" value="0.8270152443195465" />
-      <entry key="M2" value="0.91170190653115" />
-      <entry key="M5" value="1.162435392724236" />
-      <entry key="M10" value="1.8728483178895843" />
-      <entry key="M15" value="2.457187581086367" />
-      <entry key="M30" value="3.418412600065743" />
-      <entry key="H1" value="4.13727477997717" />
-      <entry key="H2" value="4.691192504809881" />
-      <entry key="H4" value="5.16098803492366" />
-      <entry key="D1" value="5.818353359103397" />
-      <entry key="W1" value="5.97270876410475" />
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="1.9000550882523794E-275" />
+      <entry key="S5" value="1.3573396114268112E-110" />
+      <entry key="S10" value="1.391618704137056E-55" />
+      <entry key="S30" value="7.786823594083319E-19" />
+      <entry key="S60" value="1.2384595493198815E-9" />
+      <entry key="M2" value="4.967254020838414E-5" />
+      <entry key="M5" value="0.02876486544327711" />
+      <entry key="M10" value="0.239834934832124" />
+      <entry key="M15" value="0.48634465163999424" />
+      <entry key="M30" value="0.9865013226423682" />
+      <entry key="H1" value="1.4405110527446927" />
+      <entry key="H2" value="2.113957325212471" />
+      <entry key="H4" value="3.4077882643032034" />
+      <entry key="D1" value="6.745842926982129" />
+      <entry key="W1" value="7.802256765271339" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.5361746013614004" />
-      <entry key="MS500" value="4.724726227299952" />
-      <entry key="S2" value="12.006020642647865" />
-      <entry key="S5" value="18.650077648963656" />
-      <entry key="S10" value="26.467872525546387" />
-      <entry key="S30" value="48.50648660906442" />
-      <entry key="S60" value="69.9645967126066" />
-      <entry key="M2" value="94.43792933712878" />
-      <entry key="M5" value="131.52039670259242" />
-      <entry key="M10" value="185.19190425312598" />
-      <entry key="M15" value="239.33903331554598" />
-      <entry key="M30" value="441.20075195118847" />
-      <entry key="H1" value="852.2201123430401" />
-      <entry key="H2" value="1413.6972895519405" />
-      <entry key="H4" value="2038.8558300220618" />
-      <entry key="D1" value="4774.888928577535" />
-      <entry key="W1" value="7035.384468534134" />
+      <entry key="MS100" value="0.9265884309179202" />
+      <entry key="MS500" value="1.0500293489802355" />
+      <entry key="S2" value="2.0977379908484046" />
+      <entry key="S5" value="5.653918611356536" />
+      <entry key="S10" value="16.11145802626321" />
+      <entry key="S30" value="43.59151321581516" />
+      <entry key="S60" value="57.63846588782044" />
+      <entry key="M2" value="66.53791153931482" />
+      <entry key="M5" value="72.88314564240594" />
+      <entry key="M10" value="78.79013418609439" />
+      <entry key="M15" value="86.48807243449077" />
+      <entry key="M30" value="118.24094808282776" />
+      <entry key="H1" value="207.6483750309185" />
+      <entry key="H2" value="490.20852339382435" />
+      <entry key="H4" value="1185.970291920109" />
+      <entry key="D1" value="4831.797168411452" />
+      <entry key="W1" value="7841.61747959259" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -120,36 +120,37 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "Python tests.Python tests in test_app.py.executor": "Run",
-    "Python.generate_icon.executor": "Run",
-    "Python.main.executor": "Run",
-    "Python.test_app.executor": "Run",
-    "RunOnceActivity.MCP Project settings loaded": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "codeWithMe.voiceChat.enabledByDefault": "false",
-    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "master",
-    "ignore.virus.scanning.warn.message": "true",
-    "junie.onboarding.icon.badge.shown": "true",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
-    "settings.editor.selected.configurable": "ml.llm.LLMThirdPartyAiProvidersConfigurable",
-    "to.speed.mode.migration.done": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python tests.Python tests in test_app.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python.generate_icon.executor&quot;: &quot;Run&quot;,
+    &quot;Python.main.executor&quot;: &quot;Run&quot;,
+    &quot;Python.test_app.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;python.packages.toolwindow.project.migrated.to.right.top.v2&quot;: &quot;true&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;org.zhavoronkov.openrouter.settings.OpenRouterConfigurable&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-python-sdk-73a66231627c-5bd6d13a2a75-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-262.10968.92" />
+        <option value="bundled-js-predefined-d6986cc7102b-4abd2a77f808-JavaScript-PY-262.11879.98" />
+        <option value="bundled-python-sdk-ebb3072d7bdf-5bd6d13a2a75-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-262.11879.98" />
       </set>
     </attachedChunks>
   </component>
@@ -179,7 +180,10 @@
       <workItem from="1792845443337" duration="3891000" />
       <workItem from="1793176227156" duration="81000" />
       <workItem from="1793176491370" duration="7611000" />
-      <workItem from="1793255625600" duration="2407000" />
+      <workItem from="1793255625600" duration="20440000" />
+      <workItem from="1793279276277" duration="4717000" />
+      <workItem from="1793456517328" duration="322000" />
+      <workItem from="1793456986843" duration="687000" />
     </task>
     <task id="LOCAL-00001" summary="Nah">
       <option name="closed" value="true" />
@@ -565,7 +569,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792847835144</updated>
     </task>
-    <option name="localTasksCounter" value="49" />
+    <task id="LOCAL-00049" summary="Add routine weekday scheduling and edit dialog, bump version to 1.6.21">
+      <option name="closed" value="true" />
+      <created>1793258290658</created>
+      <option name="number" value="00049" />
+      <option name="presentableId" value="LOCAL-00049" />
+      <option name="project" value="LOCAL" />
+      <updated>1793258290658</updated>
+    </task>
+    <option name="localTasksCounter" value="50" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -583,7 +595,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Update APK build step to include storage permissions" />
     <MESSAGE value="Add GitHub Gist cloud sync functionality, introduce app-specific local data folder, update version to 1.4.0, and refine APK build process." />
     <MESSAGE value="Update version to 1.5.0" />
     <MESSAGE value="Update to version 1.5.0: Enhance APK build with project-specific metadata, introduce asynchronous database syncing, refine UI elements for mobile, and improve local database performance." />
@@ -608,7 +619,8 @@
     <MESSAGE value="maybe" />
     <MESSAGE value="mozew" />
     <MESSAGE value="Remove obsolete server_sync.py and add AGENTS.md project documentation" />
-    <option name="LAST_COMMIT_MESSAGE" value="Remove obsolete server_sync.py and add AGENTS.md project documentation" />
+    <MESSAGE value="Add routine weekday scheduling and edit dialog, bump version to 1.6.21" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add routine weekday scheduling and edit dialog, bump version to 1.6.21" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/MasterADHD$.coverage" NAME=" Coverage Results" MODIFIED="1792401670073" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
