@@ -7,7 +7,7 @@ Osobisty menedżer zadań dla osób z ADHD: **Python + Flet 1.0.4 + SQLite**, dz
 ## Komendy
 
 ```powershell
-python -m pytest test_app.py -q                       # całość (57 testów, ~14 s)
+python -m pytest test_app.py -q                       # całość (67 testów, ~16 s)
 python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 .\.venv\Scripts\flet.exe run main.py                  # uruchomienie na PC
 ```
@@ -22,8 +22,8 @@ python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 |---|---|
 | `main.py` | Entrypoint: OTA z GitHuba, splash, wybór modułu (`app_logic_ota.py` albo wbudowany `app_logic`), rollback, ekran błędu. Na końcu re-eksport symboli `app_logic` **bez** `main` (dawniej `from app_logic import *` nadpisywał entrypoint). |
 | `app_logic.py` | ~4400 linii: schemat i operacje SQLite, konfiguracja, snapshoty, backup/import JSON, synchronizacja (Gist/HA/folder), logowanie, instalacja/aktywacja OTA oraz cały interfejs Flet w `main(page)`. |
-| `test_app.py` | 57 testów: CRUD, rutyny (w tym dni tygodnia), migracje schematu starych baz, podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile (w tym edycja z Daily z zachowaniem kategorii i usuwanie z „Cofnij”), OTA (wybór wersji, instalacja, aktywacja, rollback). `DummyPage` + tymczasowe bazy. |
-| `version.txt` | Aktualna wersja (1.6.24). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
+| `test_app.py` | 67 testów: CRUD, rutyny (w tym dni tygodnia), migracje schematu starych baz, podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile (w tym edycja z Daily z zachowaniem kategorii, usuwanie z „Cofnij”, obszary dotykowe 44 px na 400 px), wibracja z mockiem `HapticFeedback`, mini-minutnik, OTA (wybór wersji, instalacja, aktywacja, rollback). `DummyPage` + tymczasowe bazy. |
+| `version.txt` | Aktualna wersja (1.6.25). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
 | `.github/workflows/build.yml` | CI: pytest → APK → Release `latest`. |
 | `assets/icon.png` | Ikona aplikacji. |
 | `FIX_SUMMARY.md`, `README_OTA_FIX.md` | Historyczne, opisują stan 1.6.17 — nieaktualne. |
@@ -88,7 +88,11 @@ Trzy tryby w `config["sync_mode"]`: `gist`, `ha_server`, `folder` (domyślnie `n
 - Nowe widżety: używaj stałych `COLOR_BG_MAIN/CARD/SURFACE/BORDER`, `COLOR_PRIO_A/B/C`, `COLOR_SUCCESS`, `COLOR_TEXT_PRIMARY/SECONDARY` z `app_logic.py`, nie literalnych hexów.
 - `is_mobile()` to szerokość < 650 px (`page.width` lub `page.window.width`); testy używają 950 (PC) i 400 (mobile). PC: `Row(sidebar, content_area)`, mobile: `Column(content_area, bottom_nav)`.
 - `page.overlay` ma 10 dialogów; kolejność jest kontraktem testów (`[3]` edycja zadania, `[4]` usuwanie, `[5]` edycja podkroku, `[9]` edycja rutyny) — nowe okna tylko na końcu listy. Dialog usuwania (`overlay[4]`) **istnieje nadal** (kontrakt testów i operacje zbiorcze), ale karty zadań go nie otwierają.
-- Usuwanie zadania/podkroku z karty jest **natychmiastowe** (`delete_task_now` / `delete_subtask_now`) i pokazuje `ft.SnackBar` „Usunięto «…». Cofnij”. Cofnięcie przywraca pełny wiersz zadania (`restore_task_row_db`, `INSERT OR IGNORE` — to samo `id`, kategoria, priorytet, termin, podkroki) albo podkrok na tej samej pozycji (`restore_subtask_db`); drugie kliknięcie „Cofnij” nie duplikuje rekordu. Dialog zostaje tylko dla akcji nieodwracalnych zbiorczo (np. czyszczenie archiwum, import zastępujący dane).
+- Usuwanie zadania/podkroku z karty jest **natychmiastowe** (`delete_task_now` / `delete_subtask_now`) i pokazuje `ft.SnackBar` „Usunięto «…». Cofnij”. Cofnięcie przywraca pełny wiersz zadania (`restore_task_row_db`, `INSERT OR IGNORE` — to samo `id`, kategoria, priorytet, termin, podkroki) albo podkrok na tej samej pozycji (`restore_subtask_db`); drugie kliknięcie „Cofnij” nie duplikuje rekordu. Dialog zostaje tylko dla akcji nieodwracalnych zbiorczo (np. czyszczenie archiwum, import zastępujący dane). `open_delete_task_dialog` nie ma już wołających — trzyma go tylko kontrakt `overlay[4]`.
+- Wibracja: `init_haptic_service(page)` dodaje `ft.HapticFeedback` do `page.services` **tylko na platformach mobilnych** (`page.platform`); `trigger_haptic_feedback(page, service, kind)` wywołuje metodę przez `page.run_task` i respektuje `sound_enabled`. Brak klasy/usługi/uprawnień = ciche pominięcie (log `debug`), nigdy crash. Na Windows `None`. Sygnały: `timer_done`→`vibrate`, `task_done`→`light_impact`, `undo`→`selection_click`. Używać razem z `play_sound_feedback` (dźwięk na PC).
+- Dotyk (mobile): stała `TOUCH_TARGET_MIN = 44`. W `refresh_view` jest lokalny helper `_touch(default)`, który na telefonie zwraca 44, a na PC `default`. Wszystkie akcje-ikony w kartach (edytuj/usuń/dodaj krok, strzałki kroków) oraz nagłówek, szybkie dodawanie i przyciski minutnika są nim objęte — test `test_mobile_touch_targets_at_400px`.
+- Kontrast: `contrast_ratio(fg, bg)` (WCAG 2.1) i `readable_text_color(bg, preferred, fallback, minimum=4.5)` — metadane kart używają tego drugiego, więc na ciemnym tle zostaje `COLOR_TEXT_SECONDARY`, a przy zmianie tła degraduje się do `COLOR_TEXT_PRIMARY`.
+- Mini-minutnik (`_build_mini_timer`, `update_mini_timer`): jedno źródło stanu timera, dwa wystąpienia (PC w sidebarze, mobile nad dolną nawigacją w `mini_timer_mob_wrapper`). Chip zawiera pauzę/wznowienie i reset, więc działają z **każdego widoku**; klik w tło chipa wraca do Daily. `mini_timer_mob_wrapper.visible` chowa też `Divider`. Na mobile chip ma 44 px wysokości.
 - Korzeń to `page.controls[0]` (SafeArea) → `.content` (`root_layout`) → `.content` (`Row`/`Column`). Testy indeksują dalej: sidebar `controls[1]` Daily, `[2]` Master, `[3]` Dziennik; dolna nawigacja `[0]` Daily, `[1]` Master, `[2]` Dziennik (test mylnie nazywa ją `settings_mob_box`), `[3]` Ustawienia; `content_area` to `Row[2]` na PC i `Column[0]` na mobile.
 - **Wszystkie testy trzymaj w jednym pliku `test_app.py`** — także nowe; na razie nie dzielimy ich na osobne pliki (`test2_app.py` nie istnieje i nie jest uruchamiany przez CI). Autouse fixture przekierowuje bazy do `tmp_path` przez `app_logic.LOCAL_DB`/`CONFIG_DB` (patchuj `app_logic`, nie tylko `main`) **oraz wszystkie ścieżki OTA z `main`** (`OTA_DIR`, `OTA_*_FILE`, reset `_PREPARED_CACHE`), więc nie pisz do folderu użytkownika.
 - Nie zapisuj plików OTA do folderu repozytorium — tylko do folderu danych.
@@ -130,7 +134,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 
 | Sprint | Cel | Rozmiar | Status |
 |---|---|---|---|
-| 1. Mniej tarcia | Cofanie pomyłek, czytelność, timer widoczny w każdym widoku | S/M | w toku — 1.2 i 1.3 gotowe |
+| 1. Mniej tarcia | Cofanie pomyłek, czytelność, timer widoczny w każdym widoku | S/M | gotowy (1.6.25) — 1.1–1.5 wdrożone |
 | 2. Rytuał dnia i „Co teraz?” | Mniej decyzji, jedno zadanie na raz, świadomy przełom dnia | M | do zrobienia |
 | 3. Pamięć i refleksja | Historia rutyn, statystyki, czas szacowany, tygodniowy przegląd | M | do zrobienia |
 | 4. Niezawodność i bezpieczeństwo | Wątki, postęp, podpis OTA, konflikty synchronizacji | M/L | do zrobienia |
@@ -143,7 +147,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 
 ### 1.1. Wibracja w otwartej aplikacji (bez powiadomień systemowych)
 
-`P2 · S · Status: opcjonalne`
+`P2 · S · Status: gotowe (1.6.25)`
 
 **Decyzja.** Świadomie **nie dodajemy powiadomień systemowych** ani harmonogramu alarmów. Nie dodawać `flet-notifications`, `flet-audio` ani podobnych pakietów, nie zmieniać `requirements.txt`/`build.yml`, nie prosić o uprawnienia do powiadomień. Minutnik po zminimalizowaniu lub zablokowaniu telefonu pozostanie niemy — to zaakceptowane ograniczenie, nie bug.
 
@@ -203,7 +207,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 
 ### 1.4. Dotyk i czytelność
 
-`P1 · S · Status: do zrobienia`
+`P1 · S · Status: gotowe (1.6.25)`
 
 **Problem.** Ikony edycji/usuwania mają 28×28 px (app_logic.py:3653–3664 i odpowiednik mobile), a drobne teksty 10–12 px. Na telefonie to proszenie się o pomyłkę, zwłaszcza przy pośpiechu i drżeniu rąk.
 
@@ -218,7 +222,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 
 ### 1.5. Globalny mini-minutnik
 
-`P1 · S/M · Status: do zrobienia`
+`P1 · S/M · Status: gotowe (1.6.25)`
 
 **Problem.** Timer jest widoczny tylko na Daily, a jego stan (`timer_seconds_left`) żyje w `main(page)`. Po przejściu do Master użytkownik traci poczucie czasu — a to jedna z głównych trudności w ADHD.
 
@@ -494,7 +498,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 ## Definicja ukończenia (dla każdego zadania)
 
 - [ ] Kod w `app_logic.py` (lub nowym pliku) + brak zmian wymagających `main.py`, albo jasno opisane, że potrzebny jest APK.
-- [ ] Testy: nowe przypadki dopisane do `test_app.py` (jeden plik) + cały `pytest` zielony (52+).
+- [ ] Testy: nowe przypadki dopisane do `test_app.py` (jeden plik) + cały `pytest` zielony (67+).
 - [ ] Sprawdzone na PC (950 px) i mobile (400 px) — układ, dialogi, `page.overlay`.
 - [ ] Migracja schematu + eksport/import JSON, jeśli zmieniono dane.
 - [ ] `push_database_async()` w każdej nowej ścieżce zapisu.

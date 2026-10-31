@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.24"
+FALLBACK_VERSION = "1.6.25"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -1957,6 +1957,21 @@ def contrast_ratio(fg, bg):
     return (hi + 0.05) / (lo + 0.05)
 
 
+def readable_text_color(bg, preferred=COLOR_TEXT_SECONDARY, fallback=COLOR_TEXT_PRIMARY, minimum=4.5):
+    """Zwraca `preferred`, jeśli ma na tle `bg` kontrast co najmniej `minimum` (WCAG).
+
+    Pozwala trzymać metadane kart czytelne (≥ 4.5:1) i łagodnie degradować się,
+    gdy kolor tła się zmieni: wtedy wracamy do jaśniejszego `fallback`. Złe
+    wartości kolorów (np. rgba) są ignorowane — nigdy nie wywalamy UI.
+    """
+    try:
+        if contrast_ratio(preferred, bg) >= minimum:
+            return preferred
+    except (ValueError, TypeError):
+        pass
+    return fallback
+
+
 # --- DNI TYGODNIA DLA RUTYN (kotwica zgodna z Python weekday(): 0=poniedziałek ... 6=niedziela) ---
 WEEKDAY_LABELS = ["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"]
 WEEKDAY_FULL = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
@@ -2144,6 +2159,15 @@ def main(page: ft.Page):
     def _build_mini_timer(key):
         icon = ft.Icon(ft.Icons.TIMER_OUTLINED, size=15, color=COLOR_PRIO_B)
         text = ft.Text("00:00", size=13, weight=ft.FontWeight.W_600, color=COLOR_TEXT_PRIMARY)
+        # Pauza/wznowienie i reset są dostępne z każdego widoku — bez wracania do Daily.
+        play_btn = ft.IconButton(
+            icon=ft.Icons.PLAY_ARROW_ROUNDED, icon_size=16, icon_color=COLOR_SUCCESS,
+            tooltip="Pauza / wznów minutnik", on_click=lambda e: toggle_timer(),
+        )
+        reset_btn = ft.IconButton(
+            icon=ft.Icons.REPLAY_ROUNDED, icon_size=16, icon_color=COLOR_TEXT_SECONDARY,
+            tooltip="Reset minutnika", on_click=lambda e: reset_timer(),
+        )
         view = ft.Container(
             key=key,
             visible=False,
@@ -2153,16 +2177,28 @@ def main(page: ft.Page):
             padding=ft.Padding.symmetric(horizontal=10, vertical=4),
             tooltip="Minutnik skupienia — kliknij, aby wrócić do Daily",
             on_click=_mini_timer_go_daily,
-            content=ft.Row([icon, text], spacing=6, tight=True,
+            content=ft.Row([icon, text, play_btn, reset_btn], spacing=4, tight=True,
                            vertical_alignment=ft.CrossAxisAlignment.CENTER),
         )
-        return icon, text, view
+        return icon, text, play_btn, reset_btn, view
 
-    mini_timer_pc_icon, mini_timer_pc_text, mini_timer_pc = _build_mini_timer("mini_timer_pc")
-    mini_timer_mob_icon, mini_timer_mob_text, mini_timer_mob = _build_mini_timer("mini_timer_mobile")
+    (mini_timer_pc_icon, mini_timer_pc_text,
+     mini_timer_pc_play, mini_timer_pc_reset, mini_timer_pc) = _build_mini_timer("mini_timer_pc")
+    (mini_timer_mob_icon, mini_timer_mob_text,
+     mini_timer_mob_play, mini_timer_mob_reset, mini_timer_mob) = _build_mini_timer("mini_timer_mobile")
     mini_timer_icons = (mini_timer_pc_icon, mini_timer_mob_icon)
     mini_timer_texts = (mini_timer_pc_text, mini_timer_mob_text)
     mini_timer_views = (mini_timer_pc, mini_timer_mob)
+    mini_timer_play_buttons = (mini_timer_pc_play, mini_timer_mob_play)
+    mini_timer_reset_buttons = (mini_timer_pc_reset, mini_timer_mob_reset)
+
+    # Pasek mobile (Divider + licznik) trzymany jako jeden kontroler, żeby nie
+    # przesuwać indeksów `root_layout.controls` (testy: [0] content_area, [2] bottom_nav).
+    # Chowamy całość razem z licznikiem, żeby samotny Divider nie wisiał na ekranie.
+    mini_timer_mob_wrapper = ft.Column(
+        [ft.Divider(height=1, color=ft.Colors.GREY_800), mini_timer_mob],
+        spacing=0, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER
+    )
 
     def _mini_timer_should_show():
         """Widoczny w trakcie odliczania, w pauzie z czasem i po zakończeniu."""
@@ -2177,9 +2213,23 @@ def main(page: ft.Page):
             text_ctrl.color = color
         for icon_ctrl in mini_timer_icons:
             icon_ctrl.color = color
+        for btn in mini_timer_play_buttons:
+            btn.icon = ft.Icons.PAUSE_ROUNDED if timer_running else ft.Icons.PLAY_ARROW_ROUNDED
+            btn.icon_color = COLOR_PRIO_B if timer_running else COLOR_SUCCESS
+        # Na telefonie cały chip (i jego przyciski) ma obszar klikalny palca.
+        mob = is_mobile()
+        side = TOUCH_TARGET_MIN if mob else 30
+        for btn in mini_timer_play_buttons + mini_timer_reset_buttons:
+            btn.width = side
+            btn.height = side
+        for view_ctrl in mini_timer_views:
+            view_ctrl.height = TOUCH_TARGET_MIN if mob else None
+            view_ctrl.padding = (ft.Padding.symmetric(horizontal=12, vertical=8) if mob
+                                 else ft.Padding.symmetric(horizontal=10, vertical=4))
         show = _mini_timer_should_show()
         for view_ctrl in mini_timer_views:
             view_ctrl.visible = show
+        mini_timer_mob_wrapper.visible = show
 
     def update_timer_ui():
         mins = timer_seconds_left // 60
@@ -3291,13 +3341,8 @@ def main(page: ft.Page):
                        alignment=ft.MainAxisAlignment.SPACE_AROUND)
     )
 
-    # Cienki pasek mini-minutnika nad dolną nawigacją (mobile). Trzymany jako
-    # jeden kontroler, żeby nie przesuwać indeksów `root_layout.controls`
-    # (testy: [0] content_area, [2] bottom_nav).
-    mini_timer_mob_wrapper = ft.Column(
-        [ft.Divider(height=1, color=ft.Colors.GREY_800), mini_timer_mob],
-        spacing=0, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER
-    )
+    # `mini_timer_mob_wrapper` (Divider + licznik mobile) jest tworzony razem
+    # z kontrolkami mini-minutnika wyżej — tutaj tylko korzystamy z niego w layoucie.
 
     content_column = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
     content_area = ft.Container(content=content_column, expand=True, padding=15)
@@ -3357,6 +3402,10 @@ def main(page: ft.Page):
         mob = is_mobile()
         content_area.padding = 14 if mob else 25
         update_mini_timer()
+
+        def _touch(default):
+            """Obszar klikalny akcji: na telefonie min. 44 px, na PC zachowuje gęstość."""
+            return TOUCH_TARGET_MIN if mob else default
 
         daily_all = get_tasks(is_daily_view=True)
         master_all = get_tasks(is_daily_view=False)
@@ -3524,19 +3573,20 @@ def main(page: ft.Page):
                 content=ft.Column([
                     ft.Row([
                         ft.Icon(ft.Icons.VOLUME_UP_ROUNDED, size=18, color=COLOR_PRIO_B),
-                        ft.Text("Dźwięki i Powiadomienia", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
+                        ft.Text("Dźwięk i wibracja", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
                     ], spacing=8),
                     ft.Switch(
-                        label="Dźwięki sukcesu i minutnika (Audio Chime)",
+                        label="Dźwięk i wibracja przy sukcesie i końcu minutnika",
                         value=get_config("sound_enabled", "1") == "1",
                         active_color=COLOR_SUCCESS,
                         on_change=toggle_sound
                     ),
                     ft.Text(
-                        "Dźwięki systemowe działają tylko na Windows. Na telefonie aplikacja "
-                        "nie odtwarza dźwięku (Flet nie ma tam modułu audio) — minutnik nadal działa.",
+                        "Na Windows sygnałem jest krótki dźwięk systemowy. Na telefonie aplikacja "
+                        "wibruje (Flet nie ma tam modułu audio) — minutnik działa tak samo. "
+                        "Wyłączenie tej opcji wycisza dźwięk i wibrację.",
                         size=11, color=COLOR_TEXT_SECONDARY
-                    ) if sys.platform != "win32" else ft.Container()
+                    )
                 ], spacing=8)
             )
 
@@ -3846,6 +3896,8 @@ def main(page: ft.Page):
                         icon=ft.Icons.ADD_CIRCLE,
                         icon_color=COLOR_PRIO_B,
                         tooltip="Zapisz do Master listy",
+                        width=_touch(40),
+                        height=_touch(40),
                         on_click=save_inline_input
                     )
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -3863,6 +3915,8 @@ def main(page: ft.Page):
                         icon=ft.Icons.ADD_CIRCLE,
                         icon_color=COLOR_PRIO_C,
                         tooltip="Dodaj zadanie do Master listy",
+                        width=_touch(40),
+                        height=_touch(40),
                         on_click=save_inline_input
                     )
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -4030,8 +4084,8 @@ def main(page: ft.Page):
                         icon_size=16,
                         icon_color=COLOR_TEXT_SECONDARY,
                         tooltip="Edytuj zadanie",
-                        width=28,
-                        height=28,
+                        width=_touch(28),
+                        height=_touch(28),
                         on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(tid, tit, current_category=cat)
                     )
                     del_btn = ft.IconButton(
@@ -4039,8 +4093,8 @@ def main(page: ft.Page):
                         icon_size=16,
                         icon_color=COLOR_PRIO_A,
                         tooltip="Usuń zadanie",
-                        width=28,
-                        height=28,
+                        width=_touch(28),
+                        height=_touch(28),
                         on_click=lambda e, tid=task_id, tit=title: delete_task_now(tid, tit)
                     )
 
@@ -4070,8 +4124,8 @@ def main(page: ft.Page):
                         icon_size=16,
                         icon_color=COLOR_TEXT_SECONDARY,
                         tooltip="Edytuj ten krok",
-                        width=26,
-                        height=26,
+                        width=_touch(26),
+                        height=_touch(26),
                         on_click=lambda e, tid=task_id, i=idx, subs=subtasks: open_edit_subtask_dialog(tid, i, subs)
                     )
 
@@ -4080,7 +4134,7 @@ def main(page: ft.Page):
                             ft.Column(prio_items, spacing=3, tight=True),
                             ft.Column([
                                 ft.Row([
-                                    ft.Text(title, size=12, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500),
+                                    ft.Text(title, size=12, color=readable_text_color(COLOR_BG_CARD), weight=ft.FontWeight.W_500),
                                     step_badge
                                 ], spacing=6, tight=True),
                                 ft.Row([
@@ -4118,7 +4172,7 @@ def main(page: ft.Page):
                             ft.Column(prio_items, spacing=3, tight=True),
                             ft.Column([
                                 ft.Row([
-                                    ft.Text(title, size=12, color=COLOR_TEXT_SECONDARY, weight=ft.FontWeight.W_500),
+                                    ft.Text(title, size=12, color=readable_text_color(COLOR_BG_CARD), weight=ft.FontWeight.W_500),
                                     step_badge
                                 ], spacing=6, tight=True),
                                 ft.Row([
@@ -4155,8 +4209,8 @@ def main(page: ft.Page):
                         icon_size=16,
                         icon_color=COLOR_TEXT_SECONDARY,
                         tooltip="Edytuj zadanie",
-                        width=28,
-                        height=28,
+                        width=_touch(28),
+                        height=_touch(28),
                         on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(tid, tit, current_category=cat)
                     )
                     del_btn = ft.IconButton(
@@ -4164,8 +4218,8 @@ def main(page: ft.Page):
                         icon_size=16,
                         icon_color=COLOR_PRIO_A,
                         tooltip="Usuń zadanie",
-                        width=28,
-                        height=28,
+                        width=_touch(28),
+                        height=_touch(28),
                         on_click=lambda e, tid=task_id, tit=title: delete_task_now(tid, tit)
                     )
                     chk = ft.Checkbox(
@@ -4233,8 +4287,8 @@ def main(page: ft.Page):
                     icon_size=16,
                     icon_color=COLOR_TEXT_SECONDARY,
                     tooltip="Edytuj zadanie",
-                    width=28,
-                    height=28,
+                    width=_touch(28),
+                    height=_touch(28),
                     on_click=lambda e, tid=task_id, tit=title, cat=category: open_edit_task_dialog(tid, tit, current_category=cat)
                 )
                 del_btn = ft.IconButton(
@@ -4242,8 +4296,8 @@ def main(page: ft.Page):
                     icon_size=16,
                     icon_color=COLOR_PRIO_A,
                     tooltip="Usuń zadanie",
-                    width=28,
-                    height=28,
+                    width=_touch(28),
+                    height=_touch(28),
                     on_click=lambda e, tid=task_id, tit=title: delete_task_now(tid, tit)
                 )
                 chk = ft.Checkbox(
@@ -4278,8 +4332,8 @@ def main(page: ft.Page):
                     icon_size=18,
                     icon_color=COLOR_PRIO_C,
                     tooltip="Dodaj krok do planu",
-                    width=28,
-                    height=28,
+                    width=_touch(28),
+                    height=_touch(28),
                     on_click=lambda e, tid=task_id, subs=subtasks: open_subtask_dialog(tid, subs)
                 ) if mob else ft.TextButton(
                     "👣 Krok",
@@ -4321,8 +4375,8 @@ def main(page: ft.Page):
                                         icon_size=14,
                                         icon_color=COLOR_TEXT_SECONDARY if idx > 0 else COLOR_BG_BORDER,
                                         tooltip="Przesuń krok wyżej",
-                                        width=26,
-                                        height=26,
+                                        width=_touch(26),
+                                        height=_touch(26),
                                         disabled=idx == 0,
                                         on_click=lambda e, tid=task_id, i=idx: move_subtask_action(tid, i, -1)
                                     ),
@@ -4331,8 +4385,8 @@ def main(page: ft.Page):
                                         icon_size=14,
                                         icon_color=COLOR_TEXT_SECONDARY if idx < len(subtasks) - 1 else COLOR_BG_BORDER,
                                         tooltip="Przesuń krok niżej",
-                                        width=26,
-                                        height=26,
+                                        width=_touch(26),
+                                        height=_touch(26),
                                         disabled=idx >= len(subtasks) - 1,
                                         on_click=lambda e, tid=task_id, i=idx: move_subtask_action(tid, i, 1)
                                     ),
@@ -4341,8 +4395,8 @@ def main(page: ft.Page):
                                         icon_size=14,
                                         icon_color=COLOR_TEXT_SECONDARY,
                                         tooltip="Edytuj krok",
-                                        width=26,
-                                        height=26,
+                                        width=_touch(26),
+                                        height=_touch(26),
                                         on_click=lambda e, tid=task_id, i=idx, subs=subtasks: open_edit_subtask_dialog(tid, i, subs)
                                     ),
                                     ft.IconButton(
@@ -4350,8 +4404,8 @@ def main(page: ft.Page):
                                         icon_size=14,
                                         icon_color=COLOR_PRIO_A,
                                         tooltip="Usuń krok",
-                                        width=26,
-                                        height=26,
+                                        width=_touch(26),
+                                        height=_touch(26),
                                         on_click=lambda e, tid=task_id, i=idx: delete_subtask_now(tid, i)
                                     )
                                 ],
@@ -4429,8 +4483,10 @@ def main(page: ft.Page):
                             color=COLOR_TEXT_PRIMARY)
                 ], spacing=8),
                 ft.Container(expand=True),
-                ft.IconButton(ft.Icons.EMOJI_EVENTS_ROUNDED, icon_color=COLOR_PRIO_B, tooltip="Dziennik Sukcesów", on_click=lambda e: switch_view("archive")),
-                ft.IconButton(ft.Icons.SYNC, icon_color=COLOR_TEXT_SECONDARY, tooltip="Synchronizuj bazę", on_click=manual_sync),
+                ft.IconButton(ft.Icons.EMOJI_EVENTS_ROUNDED, icon_color=COLOR_PRIO_B, tooltip="Dziennik Sukcesów",
+                              width=_touch(40), height=_touch(40), on_click=lambda e: switch_view("archive")),
+                ft.IconButton(ft.Icons.SYNC, icon_color=COLOR_TEXT_SECONDARY, tooltip="Synchronizuj bazę",
+                              width=_touch(40), height=_touch(40), on_click=manual_sync),
             ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             quick_bar
         ]
@@ -4576,6 +4632,8 @@ def main(page: ft.Page):
                 on_click=lambda e: set_timer_preset(1500)
             )
 
+            timer_btn_play.width = _touch(40)
+            timer_btn_play.height = _touch(40)
             timer_card = ft.Container(
                 bgcolor=COLOR_BG_CARD,
                 border=ft.Border.all(1, COLOR_BG_BORDER),
@@ -4602,6 +4660,8 @@ def main(page: ft.Page):
                             icon_size=20,
                             icon_color=COLOR_TEXT_SECONDARY,
                             tooltip="Reset minutnika",
+                            width=_touch(40),
+                            height=_touch(40),
                             on_click=lambda e: reset_timer()
                         )
                     ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),

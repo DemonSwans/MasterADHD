@@ -35,6 +35,10 @@ class DummyPage:
         self.overlay = []
         self.controls = []
         self.on_resize = None
+        # Wibracja: domyślnie „PC”, więc init_haptic_service zwraca None i testy
+        # zachowują się jak dotąd. Test wibracji ustawia platform="android".
+        self.services = []
+        self.platform = "windows"
 
     def add(self, *controls):
         self.controls.extend(controls)
@@ -44,6 +48,16 @@ class DummyPage:
 
     def get_control(self, src_id):
         return None
+
+    def run_task(self, handler, *args, **kwargs):
+        """Minimalny odpowiednik `page.run_task` — wykonuje coroutine bez pętli asyncio."""
+        result = handler(*args, **kwargs) if callable(handler) else handler
+        if hasattr(result, "__await__"):
+            try:
+                result.send(None)
+            except StopIteration:
+                pass
+        return result
 
 
 # --- PRZYGOTOWANIE I SPRZĄTANIE ŚRODOWISKA ---
@@ -549,6 +563,22 @@ def _ui_tasks_column(page):
     return [c for c in content_col.controls if isinstance(c, ft.Column)][0]
 
 
+def _iter_controls(control):
+    """Rekurencyjnie przechodzi drzewo kontrolek Flet (controls + content)."""
+    if control is None or isinstance(control, str):
+        return
+    yield control
+    children = []
+    kids = getattr(control, "controls", None)
+    if isinstance(kids, list):
+        children.extend(kids)
+    inner = getattr(control, "content", None)
+    if inner is not None:
+        children.append(inner)
+    for child in children:
+        yield from _iter_controls(child)
+
+
 def test_ui_edit_task_from_daily_keeps_category():
     """Daily (gałąź z podkrokami) nie może nadpisać kategorii przy zapisie."""
     main.add_task_db("Zadanie z kategorią", is_daily=1, priority="A", category="💼 Praca")
@@ -732,6 +762,194 @@ def test_mobile_task_card_layout_and_actions():
     assert len(master_card.content.controls[0].controls) == 4
     # Rząd 2: action_row z Daily badge i przyciskami
     assert len(master_card.content.controls[1].controls) >= 3
+
+
+# --- 9a. SPRINT 1: WIBRACJA, DOTYK 44 px, MINI-MINUTNIK ---
+class _FakeHaptic:
+    """Rejestruje wywołania metod wibracji (odpowiednik ft.HapticFeedback)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def vibrate(self):
+        self.calls.append("vibrate")
+
+    def light_impact(self):
+        self.calls.append("light_impact")
+
+    def selection_click(self):
+        self.calls.append("selection_click")
+
+    def heavy_impact(self):
+        self.calls.append("heavy_impact")
+
+
+def test_haptic_calls_vibrate_for_timer_and_task(monkeypatch):
+    """Mock HapticFeedback → krótka wibracja na koniec timera i przy sukcesie."""
+    monkeypatch.setattr(ft, "HapticFeedback", _FakeHaptic, raising=False)
+    page = DummyPage(width=400)
+    page.platform = "android"
+
+    service = main.init_haptic_service(page)
+    assert isinstance(service, _FakeHaptic)
+
+    assert main.trigger_haptic_feedback(page, service, "timer_done") is True
+    assert service.calls == ["vibrate"]
+
+    assert main.trigger_haptic_feedback(page, service, "task_done") is True
+    assert service.calls[-1] == "light_impact"
+
+    assert main.trigger_haptic_feedback(page, service, "undo") is True
+    assert service.calls[-1] == "selection_click"
+
+
+def test_haptic_missing_attribute_does_not_crash(monkeypatch):
+    """Flet bez HapticFeedback → ciche pominięcie, żadnego wyjątku."""
+    monkeypatch.setattr(ft, "HapticFeedback", None, raising=False)
+    page = DummyPage(width=400)
+    page.platform = "android"
+
+    assert main.init_haptic_service(page) is None
+    assert main.trigger_haptic_feedback(page, None, "timer_done") is False
+
+
+def test_haptic_respects_sound_enabled(monkeypatch):
+    """sound_enabled=0 wycisza też wibrację."""
+    monkeypatch.setattr(ft, "HapticFeedback", _FakeHaptic, raising=False)
+    main.set_config("sound_enabled", "0")
+    page = DummyPage(width=400)
+    page.platform = "android"
+
+    service = main.init_haptic_service(page)
+    assert isinstance(service, _FakeHaptic)
+    assert main.trigger_haptic_feedback(page, service, "timer_done") is False
+    assert service.calls == []
+
+
+def test_haptic_not_attached_on_windows():
+    """Na PC (windows) nie przywiązujemy usługi wibracji — zachowanie jak dotąd."""
+    page = DummyPage(width=950)
+    assert main.init_haptic_service(page) is None
+
+
+def test_settings_sound_card_mentions_vibration():
+    """Etykieta w Ustawieniach mówi o dźwięku i wibracji (Sprint 1.1)."""
+    page = DummyPage(width=950)
+    main.main(page)
+
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    sidebar_col.controls[8].on_click(None)  # Ustawienia
+    content_col = root.content.controls[2].content
+
+    texts = [
+        c.value for ctrl in content_col.controls
+        for c in _iter_controls(ctrl) if isinstance(c, ft.Text)
+    ]
+    assert any("Dźwięk i wibracja" in (t or "") for t in texts)
+
+
+def test_mobile_touch_targets_at_400px():
+    """Na 400 px każda akcja-icon ma obszar klikalny ≥ 44 px (Sprint 1.4)."""
+    main.add_task_db("Z krokami", is_daily=1, priority="A")
+    main.add_task_db("Bez kroków", is_daily=1, priority="B")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+    main.update_subtasks_db(task_id, [{"title": "Krok 1", "is_done": 0}])
+
+    page = DummyPage(width=400)
+    main.main(page)
+
+    root = page.controls[0].content
+    content_col = root.content.controls[0].content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+
+    checked = 0
+    for card in tasks_col.controls:
+        for ctrl in _iter_controls(card):
+            if isinstance(ctrl, ft.IconButton):
+                assert ctrl.width is not None and ctrl.width >= 44, ctrl.tooltip
+                assert ctrl.height is not None and ctrl.height >= 44, ctrl.tooltip
+                checked += 1
+    assert checked >= 4  # edytuj/usuń zadania + akcje kroków
+
+    # Minutnik: play i reset też są klikalne palcem.
+    timer_card = content_col.controls[2]
+    timer_buttons = [c for c in _iter_controls(timer_card) if isinstance(c, ft.IconButton)]
+    assert timer_buttons
+    for b in timer_buttons:
+        assert b.width >= 44 and b.height >= 44
+
+
+def test_secondary_text_contrast_on_cards():
+    """Metadane kart mają kontrast ≥ 4.5:1; helper realnie używa contrast_ratio()."""
+    assert main.contrast_ratio(main.COLOR_TEXT_SECONDARY, main.COLOR_BG_CARD) >= 4.5
+    assert main.readable_text_color(main.COLOR_BG_CARD) == main.COLOR_TEXT_SECONDARY
+    # Na jasnym tle ciemny tekst jest nieczytelny → fallback do jasnego.
+    assert main.readable_text_color("#ffffff") == main.COLOR_TEXT_PRIMARY
+    # Zła wartość koloru nie może wywalić UI.
+    assert main.readable_text_color("not-a-color") == main.COLOR_TEXT_PRIMARY
+
+
+def test_mini_timer_visible_and_touch_size_on_mobile():
+    """Globalny licznik z pauzą/resetem jest widoczny i klikalny palcem (1.5)."""
+    main.add_task_db("Zadanie", is_daily=1, priority="A")
+    # Częściowo zużyty minutnik bez wątku: stan „w pauzie”.
+    main.set_config("timer_total", "300")
+    main.set_config("timer_running", "0")
+    main.set_config("timer_left", "180")
+
+    page = DummyPage(width=400)
+    main.main(page)
+
+    root = page.controls[0].content
+    wrapper = root.content.controls[1]
+    chip = wrapper.controls[1]
+
+    assert wrapper.visible is True
+    assert chip.visible is True
+    assert chip.height >= 44
+    assert chip.content.controls[1].value == "03:00"  # odtworzone z configu
+
+    play_btn = chip.content.controls[2]
+    reset_btn = chip.content.controls[3]
+    assert play_btn.width >= 44 and play_btn.height >= 44
+    assert reset_btn.width >= 44 and reset_btn.height >= 44
+    assert callable(play_btn.on_click)
+    assert callable(reset_btn.on_click)
+
+
+def test_mini_timer_hidden_without_active_timer_mobile():
+    """Bez minutnika chip i Divider są schowane — nic nie wisi nad nawigacją."""
+    page = DummyPage(width=400)
+    main.main(page)
+
+    root = page.controls[0].content
+    wrapper = root.content.controls[1]
+    assert wrapper.visible is False
+    assert wrapper.controls[1].visible is False
+
+
+def test_mini_timer_reset_works_from_master_view():
+    """Reset minutnika działa z Master (bez wracania do Daily)."""
+    main.set_config("timer_total", "300")
+    main.set_config("timer_running", "0")
+    main.set_config("timer_left", "120")
+
+    page = DummyPage(width=400)
+    main.main(page)
+
+    root = page.controls[0].content
+    bottom_nav = root.content.controls[2].content
+    bottom_nav.controls[1].content.on_click(None)  # przełącz na Master
+
+    wrapper = root.content.controls[1]
+    chip = wrapper.controls[1]
+    reset_btn = chip.content.controls[3]
+    reset_btn.on_click(None)
+
+    assert main.get_config("timer_left") == "300"
+    assert main.get_config("timer_running") == "0"
+    assert chip.visible is False
 
 
 # --- 10. TEST DZIENNIKA SUKCESÓW (ARCHIWUM WYKONANYCH ZADAŃ) ---
