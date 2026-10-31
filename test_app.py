@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import urllib.request
 from datetime import date, datetime, timedelta
 import pytest
@@ -384,9 +385,33 @@ def test_progress_calculation():
     fake_routines = [(1, "Leki", 1)]
     assert main.calculate_progress_logic(fake_tasks, fake_routines, {}) == 0.5
 
+    # Sprint 4.2: punktacja hybrydowa — 1/2 podkroków = 0.5 punktu za zadanie.
     fake_tasks_done = [(1, "Projekt", 1, 0, "A", [{"title": "K1", "is_done": 1}, {"title": "K2", "is_done": 0}])]
-    assert main.calculate_progress_logic(fake_tasks_done, fake_routines, {1: 0}) == 1.0
-    assert main.calculate_progress_logic(fake_tasks_done, fake_routines, {1: 1}) == 0.5
+    assert main.calculate_progress_logic(fake_tasks_done, fake_routines, {}) == 0.75
+    assert main.calculate_progress_logic(fake_tasks_done, fake_routines, {1: 0}) == 0.75
+    assert main.calculate_progress_logic(fake_tasks_done, fake_routines, {1: 1}) == 0.75
+
+
+def test_progress_hybrid_edges():
+    # Brak elementów → 0.0 (bez dzielenia przez zero).
+    assert main.calculate_progress_logic([], []) == 0.0
+    # Samo rutyny: 3 z 4 zrobione → 0.75.
+    routines = [(1, "A", 1), (2, "B", 1), (3, "C", 1), (4, "D", 0)]
+    assert main.calculate_progress_logic([], routines) == 0.75
+    # Zadanie bez podkroków = 1 punkt, gdy ukończone.
+    plain = [(1, "Z", 1, 1, "A", [])]
+    assert main.calculate_progress_logic(plain, []) == 1.0
+    # 1/3 podkroków.
+    third = [(1, "Z", 1, 0, "A", [{"title": "a", "is_done": 1},
+                                 {"title": "b", "is_done": 0},
+                                 {"title": "c", "is_done": 0}])]
+    assert main.calculate_progress_logic(third, []) == pytest.approx(1 / 3)
+    # Wszystko zrobione → 100% (podkroki + zadanie + rutyna).
+    full_tasks = [(1, "Z", 1, 1, "A", [{"title": "a", "is_done": 1}, {"title": "b", "is_done": 1}])]
+    assert main.calculate_progress_logic(full_tasks, [(1, "R", 1)]) == 1.0
+    # Zadanie z podkrokami nie daje 100%, dopóki zostały niezrobione podkroki.
+    partial = [(1, "Z", 1, 1, "A", [{"title": "a", "is_done": 1}, {"title": "b", "is_done": 0}])]
+    assert main.calculate_progress_logic(partial, []) < 1.0
 
 
 # --- 5. TEST RESETU NA KONIEC DNIA ---
@@ -2303,6 +2328,214 @@ def test_ui_edit_dialog_sets_estimate():
     btn_30.on_click(None)
     dialog.actions[1].on_click(None)
     assert main.get_task_estimate(task_id) == 30
+
+
+# --- SPRINT 4.1: jeden bezpieczny punkt aktualizacji UI + próg resize ---
+def _content_col(page):
+    """Kolumna treści niezależnie od układu PC (Row) / mobile (Column)."""
+    root = page.controls[0].content
+    if isinstance(root.content, ft.Row):
+        return root.content.controls[2].content
+    return root.content.controls[0].content
+
+
+class _QueuedPage(DummyPage):
+    """Strona, która nie wykonuje `run_thread` od razu (do testu koalescencji)."""
+
+    def __init__(self, width=950):
+        super().__init__(width)
+        self.pending = []
+
+    def run_thread(self, handler, *args, **kwargs):
+        self.pending.append(handler)
+
+
+def test_ui_update_scheduler_coalesces():
+    page = _QueuedPage()
+    calls = []
+
+    def sink():
+        calls.append(1)
+
+    main.schedule_ui_update(page, sink)
+    main.schedule_ui_update(page, sink)
+    main.schedule_ui_update(page, sink)
+    # Ten sam callback nie dubluje się, dopóki poprzednia aktualizacja czeka.
+    assert len(page.pending) == 1
+    page.pending[0]()
+    assert calls == [1]
+
+
+def test_ui_update_scheduler_runs_without_runner():
+    page = DummyPage()  # brak run_thread -> fallback na run_task (natychmiast)
+    calls = []
+    main.schedule_ui_update(page, lambda: calls.append("a"))
+    main.schedule_ui_update(page, lambda: calls.append("b"))
+    assert calls == ["a", "b"]
+
+
+def test_ui_update_scheduler_thread_safe():
+    page = DummyPage(width=950)
+    main.main(page)
+    errors = []
+
+    def worker():
+        try:
+            for _ in range(20):
+                main.set_sync_status("ok", "test")
+        except Exception as exc:  # pragma: no cover - tylko raport błędu
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    assert errors == []
+
+
+def test_resize_rebuilds_only_on_mobile_threshold():
+    main.add_task_db("Zadanie", is_daily=1, priority="B")
+    page = DummyPage(width=950)
+    main.main(page)
+    progress_before = _content_col(page).controls[3]
+
+    # 950 -> 949 -> 948 to wciąż PC: bez przebudowy.
+    page.width = 949
+    page.on_resize(None)
+    assert _content_col(page).controls[3] is progress_before
+    page.width = 948
+    page.on_resize(None)
+    assert _content_col(page).controls[3] is progress_before
+
+    # Przekroczenie progu 650 px przebudowuje widok raz.
+    page.width = 400
+    page.on_resize(None)
+    assert _content_col(page).controls[3] is not progress_before
+
+
+def test_quick_input_survives_refresh():
+    main.add_task_db("Zadanie", is_daily=1, priority="B")
+    page = DummyPage(width=950)
+    main.main(page)
+    content_col = _content_col(page)
+    quick_bar = content_col.controls[1]
+    field = quick_bar.content.controls[0]
+    field.value = "niedokończona myśl"
+
+    # Odświeżenie wywołane zmianą progu nie czyści pola szybkiego dodawania.
+    page.width = 400
+    page.on_resize(None)
+    field_after = _content_col(page).controls[1].content.controls[0]
+    assert field_after.value == "niedokończona myśl"
+
+
+# --- SPRINT 4.2: puste Daily nie pokazuje mylącego 0% ---
+def test_daily_progress_empty_shows_no_tasks_text():
+    page = DummyPage(width=950)
+    main.main(page)
+    progress_card = _content_col(page).controls[3]
+    assert _control_contains_text(progress_card, "Brak zadań na dziś")
+
+
+# --- SPRINT 4.4: konflikty synchronizacji bez cichej utraty danych ---
+def test_sync_conflict_state_helpers():
+    assert main.get_sync_conflict() is None
+    main.set_sync_conflict_state("rh", "lh", "gist")
+    conflict = main.get_sync_conflict()
+    assert conflict is not None
+    assert conflict["remote_hash"] == "rh"
+    assert conflict["choice_pending"] is True
+
+    ok, _ = main.resolve_sync_conflict("nieznany")
+    assert ok is False
+
+    main.clear_sync_conflict()
+    assert main.get_sync_conflict() is None
+
+
+def test_sync_conflict_blocks_push(tmp_path):
+    sync_dir = tmp_path / "blockpush"
+    sync_dir.mkdir()
+    main.set_config("sync_mode", "folder")
+    main.set_config("sync_folder", str(sync_dir))
+    main.set_sync_conflict_state("r", "l", "test")
+
+    ok, msg = main.push_database()
+    assert ok is False
+    assert "konflikt" in msg.lower()
+
+
+def test_sync_conflict_detection_and_resolution(tmp_path):
+    sync_dir = tmp_path / "sync_conf"
+    sync_dir.mkdir()
+    remote = sync_dir / "tasks.db"
+
+    main.set_config("sync_mode", "folder")
+    main.set_config("sync_folder", str(sync_dir))
+
+    # 1. Bazowy stan: zadanie + push do folderu (punkt odniesienia synchronizacji).
+    main.add_task_db("Bazowe", is_daily=0, priority="B")
+    assert remote.exists()
+
+    # 2. Inne urządzenie zmienia zdalną bazę.
+    conn = sqlite3.connect(str(remote))
+    conn.execute("INSERT INTO tasks (title, is_daily, priority) VALUES ('Zdalne', 0, 'B')")
+    conn.commit()
+    conn.close()
+    future = os.path.getmtime(str(remote)) + 10
+    os.utime(str(remote), (future, future))
+
+    # 3. Lokalna zmiana bez auto-pushu (na chwilę tryb lokalny).
+    main.set_config("sync_mode", "none")
+    main.add_task_db("Lokalne", is_daily=0, priority="B")
+    main.set_config("sync_mode", "folder")
+
+    # 4. Pull wykrywa konflikt i NIE nadpisuje lokalnej bazy.
+    ok, msg = main.pull_database(force=False)
+    assert ok is True
+    assert "konflikt" in msg.lower()
+    assert main.get_sync_conflict() is not None
+    titles = [t[1] for t in main.get_tasks(is_daily_view=False)]
+    assert "Lokalne" in titles
+    assert "Zdalne" not in titles
+
+    # 5. Push jest zablokowany, dopóki konflikt nie zostanie rozstrzygnięty.
+    push_ok, push_msg = main.push_database()
+    assert push_ok is False
+    assert "konflikt" in push_msg.lower()
+
+    # 6. Rozstrzygnięcie: pobierz wersję zdalną.
+    ok, msg = main.resolve_sync_conflict("keep_remote")
+    assert ok is True
+    assert main.get_sync_conflict() is None
+    titles = [t[1] for t in main.get_tasks(is_daily_view=False)]
+    assert "Zdalne" in titles
+    assert "Lokalne" not in titles
+
+    # 7. Po rozstrzygnięciu zapis znów działa.
+    push_ok, _ = main.push_database()
+    assert push_ok is True
+
+
+def test_sync_conflict_keep_local_clears_and_pushes(tmp_path):
+    sync_dir = tmp_path / "sync_keep"
+    sync_dir.mkdir()
+    main.set_config("sync_mode", "folder")
+    main.set_config("sync_folder", str(sync_dir))
+    main.set_sync_conflict_state("r", "l", "test")
+
+    ok, msg = main.resolve_sync_conflict("keep_local")
+    assert ok is True
+    assert main.get_sync_conflict() is None
+    # Lokalna baza trafiła do folderu.
+    assert os.path.exists(str(sync_dir / "tasks.db"))
+
+
+def test_sync_conflict_banner_visible():
+    main.set_sync_conflict_state("remote_hash", "local_hash", "folder")
+    page = DummyPage(width=950)
+    main.main(page)
+    content_col = _content_col(page)
+    assert _control_contains_text(content_col, "Wykryto konflikt synchronizacji")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import json
 import logging
@@ -19,7 +20,7 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.28"
+FALLBACK_VERSION = "1.7.0"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -43,6 +44,12 @@ DB_BUSY_TIMEOUT_MS = 5000
 SNAPSHOT_LIMIT = 10
 ARCHIVE_LIMIT = 2000
 SYNC_DEBOUNCE_SECONDS = 1.5
+
+# --- SPRINT 4.4: konflikty synchronizacji bez cichej utraty danych ---
+# Konflikt = lokalna i zdalna baza zmieniły się od ostatniej synchronizacji.
+# Stan zapisujemy w configu (JSON), a użytkownik rozstrzyga go świadomie.
+SYNC_CONFLICT_KEY = "sync_conflict"
+SYNC_CONFLICT_CHOICES = ("keep_local", "keep_remote", "restore_snapshot")
 
 # --- SPRINT 2: rytuał dnia (2.1) i Inbox (2.3) ---
 # Kategoria systemowa, do której trafiają szybkie zrzuty myśli (bez zmiany schematu).
@@ -196,7 +203,7 @@ def db_connection(db_path=None, write=False):
                 try:
                     conn.rollback()
                 except Exception:
-                    pass
+                    LOG.debug("Rollback nie powiódł się dla %s", path, exc_info=True)
             raise
         finally:
             if conn is not None:
@@ -220,7 +227,7 @@ def _touch_db_change():
         finally:
             conn.close()
     except Exception:
-        pass
+        LOG.debug("Nie udało się zapisać znacznika zmiany bazy", exc_info=True)
 
 
 # --- KONFIGURACJA LOKALNA ---
@@ -455,15 +462,186 @@ def _restore_db_from_bytes(data, label="pobraną bazę"):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
         except Exception:
-            pass
+            LOG.debug("Nie udało się usunąć pliku tymczasowego %s", tmp_path, exc_info=True)
     return True, "ok"
 
 
-def pull_database(force=False):
+# --- SPRINT 4.4: wykrywanie i rozstrzyganie konfliktów synchronizacji ---
+def _sqlite_content_hash(path):
+    """Stabilny skrót treści bazy (bez pól zmiennych jak `exported_at`).
+
+    Liczymy go z logicznej zawartości (wiersze tabel), a nie z bajtów pliku:
+    SQLite po zapisie przez `backup_database()` ustawia strony inaczej, więc
+    porównywanie bajtów dawałoby fałszywe konflikty. Zwraca "" gdy bazy nie da
+    się odczytać albo nie ma tabeli `tasks`.
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(path, timeout=DB_BUSY_TIMEOUT_MS / 1000.0)
+        conn.execute(f"PRAGMA busy_timeout={DB_BUSY_TIMEOUT_MS}")
+        task_cols = _table_columns(conn, "tasks")
+        if not task_cols:
+            return ""
+        h = hashlib.sha256()
+        wanted = ("id", "title", "is_daily", "is_done", "priority", "subtasks",
+                  "category", "deadline", "created_at", "updated_at", "estimate_min")
+        cols = [c for c in wanted if c in task_cols]
+        rows = conn.execute(f"SELECT {', '.join(cols)} FROM tasks ORDER BY id").fetchall()
+        h.update(repr([tuple(r) for r in rows]).encode("utf-8"))
+        for table, wanted_cols, order in (
+            ("routines", ("id", "title", "is_done", "routine_days"), "id"),
+            ("routine_log", ("routine_id", "date", "done"), "routine_id, date"),
+            ("completed_archive", ("id", "title", "priority", "completed_at"), "id"),
+        ):
+            tcols = _table_columns(conn, table)
+            cols = [c for c in wanted_cols if c in tcols]
+            if not cols:
+                continue
+            rows = conn.execute(f"SELECT {', '.join(cols)} FROM {table} ORDER BY {order}").fetchall()
+            h.update(repr([tuple(r) for r in rows]).encode("utf-8"))
+        return h.hexdigest()
+    except Exception as e:
+        LOG.debug("Nie udało się policzyć skrótu zawartości %s: %s", path, e)
+        return ""
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _db_content_hash():
+    """Skrót treści lokalnej bazy ("" gdy bazy jeszcze nie ma)."""
+    if not os.path.exists(LOCAL_DB):
+        return ""
+    return _sqlite_content_hash(LOCAL_DB)
+
+
+def _content_hash_of_bytes(data):
+    """Skrót treści bazy z pobranych bajtów (przez plik tymczasowy)."""
+    tmp_dir = os.path.dirname(os.path.abspath(LOCAL_DB)) or APP_DIR
+    tmp_path = os.path.join(tmp_dir, ".hash_remote.db")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        return _sqlite_content_hash(tmp_path)
+    except Exception as e:
+        LOG.debug("Nie udało się policzyć skrótu pobranej bazy: %s", e)
+        return ""
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            LOG.debug("Nie udało się usunąć pliku tymczasowego %s", tmp_path, exc_info=True)
+
+
+def get_sync_conflict():
+    """Zwraca oczekujący konflikt synchronizacji (dict) albo None."""
+    raw = get_config(SYNC_CONFLICT_KEY, "")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and data.get("choice_pending"):
+            return data
+    except Exception as e:
+        LOG.warning("Nieczytelny stan konfliktu synchronizacji: %s", e)
+    return None
+
+
+def set_sync_conflict_state(remote_hash, local_hash="", label=""):
+    """Zapisuje konflikt oczekujący na decyzję użytkownika (nie nadpisuje danych)."""
+    data = {
+        "detected_at": now_iso(),
+        "label": label,
+        "local_hash": local_hash,
+        "remote_hash": remote_hash,
+        "choice_pending": True,
+    }
+    set_config(SYNC_CONFLICT_KEY, json.dumps(data, ensure_ascii=False))
+    set_sync_status("conflict", "Wykryto konflikt synchronizacji")
+    LOG.warning("Konflikt synchronizacji (%s): lokalna i zdalna baza zmieniły się od ostatniej synchronizacji",
+                label or "bez etykiety")
+
+
+def clear_sync_conflict():
+    set_config(SYNC_CONFLICT_KEY, "")
+
+
+def _mark_synced(content_hash=None):
+    """Zapamiętuje stan ostatniej udanej synchronizacji (skrót treści + czas)."""
+    try:
+        if content_hash is None:
+            content_hash = _db_content_hash()
+        if content_hash:
+            set_config("last_synced_hash", content_hash)
+        set_config("last_synced_at", now_iso())
+    except Exception as e:
+        LOG.warning("Nie udało się zapisać znacznika synchronizacji: %s", e)
+
+
+def _reset_sync_markers():
+    """Czyści znaczniki synchronizacji (przy zmianie trybu — nowy punkt odniesienia)."""
+    clear_sync_conflict()
+    set_config("last_synced_hash", "")
+    set_config("last_synced_at", "")
+
+
+def _detect_conflict(remote_hash, label=""):
+    """Wykrywa konflikt: obie strony (lokalna i zdalna) zmienione od ostatniej synchronizacji.
+
+    Bezpieczne reguły (nigdy nie nadpisujemy w ciemno):
+      * brak punktu odniesienia (`last_synced_hash`) → brak konfliktu (pierwsza sync);
+      * treści identyczne → brak konfliktu (nic nie ginie);
+      * zmieniona tylko lokalna albo tylko zdalna → brak konfliktu;
+      * zmienione obie i różne → konflikt do świadomej decyzji.
+    """
+    last = get_config("last_synced_hash", "")
+    if not last or not remote_hash:
+        return False
+    local_hash = _db_content_hash()
+    if not local_hash:
+        return False
+    if local_hash == remote_hash or local_hash == last or remote_hash == last:
+        return False
+    set_sync_conflict_state(remote_hash, local_hash, label)
+    return True
+
+
+def resolve_sync_conflict(choice):
+    """Rozstrzyga oczekujący konflikt. Zwraca (ok, komunikat)."""
+    if choice not in SYNC_CONFLICT_CHOICES:
+        return False, "Nieznany wybór"
+    if not get_sync_conflict():
+        return False, "Brak aktywnego konfliktu synchronizacji"
+    if choice == "keep_local":
+        # Wersja lokalna wygrywa: kasujemy konflikt i wysyłamy ją do chmury.
+        clear_sync_conflict()
+        _mark_synced()
+        push_database_async()
+        return True, "Zachowano wersję lokalną"
+    if choice == "keep_remote":
+        # Przed nadpisaniem lokalnej bazy robimy snapshot bezpieczeństwa.
+        make_local_snapshot("pre_conflict_remote")
+        ok, msg = pull_database(force=True, resolve_conflict=True)
+        if ok:
+            clear_sync_conflict()
+            _mark_synced()
+        return ok, msg
+    # restore_snapshot — powrót do ostatniej kopii bezpieczeństwa.
+    ok, msg = restore_pre_sync_backup()
+    if ok:
+        clear_sync_conflict()
+        _mark_synced()
+    return ok, msg
+
+
+def pull_database(force=False, resolve_conflict=False):
     """Pobiera bazę z chmury/dysku.
 
     `force=False` (start aplikacji) NIE nadpisuje nowszych danych lokalnych.
     `force=True` (ręczna synchronizacja) pobiera zawsze.
+    `resolve_conflict=True` pomija wykrywanie konfliktu (używane tylko wtedy,
+    gdy użytkownik świadomie wybrał wersję zdalną w panelu konfliktu).
     """
     mode = get_config("sync_mode", "none")
 
@@ -495,17 +673,22 @@ def pull_database(force=False):
                         if content:
                             try:
                                 remote_ts = json.loads(content).get("exported_at", "") or ""
-                            except Exception:
+                            except Exception as e:
+                                LOG.debug("Nie udało się odczytać znacznika czasu z chmury: %s", e)
                                 remote_ts = ""
+                        b64_content = files["tasks.db.b64"].get("content", "")
+                        raw_db = base64.b64decode(b64_content.encode("utf-8"))
+                        if not is_valid_sqlite(raw_db):
+                            return False, "Odrzucono: Plik w chmurze jest uszkodzony"
+                        # Sprint 4.4: nie nadpisujemy lokalnych zmian, jeśli i chmura
+                        # zmieniła się od ostatniej synchronizacji.
+                        if not resolve_conflict and _detect_conflict(_content_hash_of_bytes(raw_db), "gist"):
+                            return True, "Wykryto konflikt synchronizacji — wybierz wersję w panelu"
                         if not force:
                             local_ts = get_config("db_last_change", "")
                             if remote_ts and local_ts and remote_ts < local_ts:
                                 return True, "Chmura jest starsza niż dane lokalne — pominięto pobieranie"
 
-                        b64_content = files["tasks.db.b64"].get("content", "")
-                        raw_db = base64.b64decode(b64_content.encode("utf-8"))
-                        if not is_valid_sqlite(raw_db):
-                            return False, "Odrzucono: Plik w chmurze jest uszkodzony"
                         make_local_snapshot("pre_pull")
                         ok, msg = _restore_db_from_bytes(raw_db, "baza w chmurze")
                         if not ok:
@@ -514,6 +697,7 @@ def pull_database(force=False):
                         # kolejny start nie pobiera w kółko tych samych danych.
                         if remote_ts:
                             set_config("db_last_change", remote_ts)
+                        _mark_synced()
                         return True, "Pobrano bazę z Chmury"
                     return True, "Chmura gotowa"
         except urllib.error.HTTPError as e:
@@ -538,20 +722,25 @@ def pull_database(force=False):
                     data = resp.read()
                     if not is_valid_sqlite(data):
                         return False, "Odrzucono: Pobrany plik to nie baza"
+                    # Sprint 4.4: świadoma decyzja zamiast cichego nadpisania.
+                    if not resolve_conflict and _detect_conflict(_content_hash_of_bytes(data), "ha_server"):
+                        return True, "Wykryto konflikt synchronizacji — wybierz wersję w panelu"
                     # Serwer HA nie ma metadanych w treści, ale zwykle wysyła
                     # Last-Modified — nie pozwalamy starszym danym nadpisać lokalnych.
                     last_modified = ""
                     remote_dt = None
                     try:
                         last_modified = resp.headers.get("Last-Modified", "") or ""
-                    except Exception:
+                    except Exception as e:
+                        LOG.debug("Serwer HA bez nagłówka Last-Modified: %s", e)
                         last_modified = ""
                     if last_modified:
                         try:
                             remote_dt = parsedate_to_datetime(last_modified)
                             if remote_dt.tzinfo is not None:
                                 remote_dt = remote_dt.astimezone().replace(tzinfo=None)
-                        except Exception:
+                        except Exception as e:
+                            LOG.debug("Nie udało się sparsować Last-Modified serwera HA: %s", e)
                             remote_dt = None
                     if not force and remote_dt is not None:
                         local_ts = get_config("db_last_change", "")
@@ -559,8 +748,8 @@ def pull_database(force=False):
                             try:
                                 if remote_dt < datetime.fromisoformat(local_ts):
                                     return True, "Serwer HA ma starsze dane — pominięto pobieranie"
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                LOG.debug("Nie udało się porównać czasu lokalnego z serwerem HA: %s", e)
                     make_local_snapshot("pre_pull")
                     ok, msg = _restore_db_from_bytes(data, "baza z serwera HA")
                     if not ok:
@@ -570,6 +759,7 @@ def pull_database(force=False):
                         "db_last_change",
                         (remote_dt or datetime.now()).isoformat(timespec="seconds"),
                     )
+                    _mark_synced()
                     return True, "Pobrano bazę z serwera HA"
         except urllib.error.HTTPError as e:
             LOG.warning("HTTP %s z HA: %s", e.code, e.reason)
@@ -590,6 +780,16 @@ def pull_database(force=False):
         remote_file = os.path.join(folder, "tasks.db")
         if os.path.exists(remote_file):
             try:
+                data = _read_remote_bytes(remote_file)
+                if not is_valid_sqlite(data):
+                    return False, "Odrzucono: Plik jest uszkodzony (to nie baza SQLite)"
+                ok, status = _validate_sqlite_bytes(data)
+                if not ok:
+                    return False, f"Odrzucono: Plik jest uszkodzony ({status})"
+                # Sprint 4.4: nie nadpisujemy lokalnych zmian, jeśli i plik w folderze
+                # zmienił się od ostatniej synchronizacji.
+                if not resolve_conflict and _detect_conflict(_content_hash_of_bytes(data), "folder"):
+                    return True, "Wykryto konflikt synchronizacji — wybierz wersję w panelu"
                 if not force:
                     last_push = get_config("folder_push_mtime", "")
                     remote_mtime = os.path.getmtime(remote_file)
@@ -597,22 +797,17 @@ def pull_database(force=False):
                         try:
                             if abs(remote_mtime - float(last_push)) < 1.0:
                                 return True, "Baza już zsynchronizowana z folderem"
-                        except ValueError:
-                            pass
+                        except ValueError as e:
+                            LOG.debug("Nieczytelny znacznik folder_push_mtime: %s", e)
                     if os.path.exists(LOCAL_DB) and remote_mtime <= os.path.getmtime(LOCAL_DB):
                         return True, "Baza lokalna jest nowsza — pominięto pobieranie"
 
-                data = _read_remote_bytes(remote_file)
-                if not is_valid_sqlite(data):
-                    return False, "Odrzucono: Plik jest uszkodzony (to nie baza SQLite)"
-                ok, status = _validate_sqlite_bytes(data)
-                if not ok:
-                    return False, f"Odrzucono: Plik jest uszkodzony ({status})"
                 make_local_snapshot("pre_pull")
                 backup_database(LOCAL_DB, source_path=remote_file)
                 # Baza z folderu może pochodzić ze starszej wersji (brak nowych kolumn).
                 ensure_schema_upgrade()
                 set_config("folder_push_mtime", str(os.path.getmtime(remote_file)))
+                _mark_synced()
                 return True, "Pobrano bazę z folderu"
             except Exception as e:
                 LOG.warning("Błąd odczytu z folderu: %s", e)
@@ -626,6 +821,9 @@ def push_database():
     mode = get_config("sync_mode", "none")
     if mode == "none" or not os.path.exists(LOCAL_DB):
         return True, ""
+    # Sprint 4.4: nie wysyłamy nic, dopóki użytkownik nie rozstrzygnie konfliktu.
+    if get_sync_conflict():
+        return False, "Konflikt synchronizacji — najpierw wybierz wersję"
 
     if mode == "gist":
         token = get_config("gist_token", "").strip()
@@ -671,6 +869,7 @@ def push_database():
                     if not gist_id and "id" in res_data:
                         set_config("gist_id", res_data["id"])
                     set_config("last_push_at", datetime.now().isoformat(timespec="seconds"))
+                    _mark_synced()
                     return True, "Zapisano w Chmurze"
         except Exception as e:
             LOG.warning("Push gist: %s", e)
@@ -698,6 +897,7 @@ def push_database():
             with urllib.request.urlopen(req, timeout=4) as resp:
                 if resp.status == 200:
                     set_config("last_push_at", datetime.now().isoformat(timespec="seconds"))
+                    _mark_synced()
                     return True, "Zapisano na serwerze HA"
         except Exception as e:
             LOG.warning("Push HA: %s", e)
@@ -734,6 +934,7 @@ def push_database():
             except Exception:
                 pass
             set_config("last_push_at", datetime.now().isoformat(timespec="seconds"))
+            _mark_synced()
             return True, "Zaktualizowano na Dysku"
         except Exception as e:
             LOG.warning("Push folder: %s", e)
@@ -773,7 +974,7 @@ def set_sync_status(status, message=""):
         try:
             cb(get_sync_state())
         except Exception:
-            pass
+            LOG.debug("Callback stanu synchronizacji zawiódł", exc_info=True)
 
 
 def _ensure_sync_worker():
@@ -829,7 +1030,7 @@ def flush_pending_sync(timeout=3.0):
                 return
             time.sleep(0.1)
     except Exception:
-        pass
+        LOG.debug("Oczekiwanie na dopięcie zapisu przerwane", exc_info=True)
 
 
 def push_database_async():
@@ -903,7 +1104,7 @@ def install_ota_code(new_code, remote_ver):
             try:
                 os.fsync(f.fileno())
             except Exception:
-                pass
+                LOG.debug("OTA: fsync pliku tymczasowego nie powiódł się", exc_info=True)
         os.replace(tmp_path, target)
 
         for path in _version_files():
@@ -915,7 +1116,7 @@ def install_ota_code(new_code, remote_ver):
             try:
                 os.remove(failed_path)
             except Exception:
-                pass
+                LOG.debug("OTA: nie udało się usunąć znacznika wadliwej wersji", exc_info=True)
         LOG.info("OTA: zapisano v%s w %s", remote_ver, target)
         return True, target
     except Exception as e:
@@ -924,7 +1125,7 @@ def install_ota_code(new_code, remote_ver):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
         except Exception:
-            pass
+            LOG.debug("OTA: nie udało się usunąć pliku tymczasowego %s", tmp_path, exc_info=True)
         return False, f"Nie udało się zapisać aktualizacji: {e}"
 
 
@@ -936,7 +1137,7 @@ def _restore_version_files(version):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(version)
         except Exception:
-            pass
+            LOG.debug("OTA: nie udało się przywrócić numeru wersji w %s", path, exc_info=True)
 
 
 def activate_downloaded_ota(page, expected_version=""):
@@ -972,6 +1173,8 @@ def activate_downloaded_ota(page, expected_version=""):
             raise AttributeError("Pobrany kod nie zawiera funkcji main(page)")
 
         # Stary interfejs (i jego okna dialogowe) znika razem z referencjami.
+        # Najpierw wykonujemy zaległe aktualizacje UI, żeby nie pisały do starych kontrolek.
+        flush_ui_queue(page)
         page.overlay.clear()
         page.controls.clear()
         module.main(page)
@@ -2293,25 +2496,30 @@ def triage_inbox_task_db(task_id, category="Ogólne", priority="B", is_daily=Fal
 
 
 def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=None):
-    if active_subtask_idx_map is None:
-        active_subtask_idx_map = {}
+    """Postęp dnia — punktacja hybrydowa (sprint 4.2).
+
+    Jedna, jasna reguła:
+      * zadanie bez podkroków = 1 punkt, gdy ukończone;
+      * zadanie z podkrokami = ułamek (0..1) ukończonych podkroków;
+      * rutyna = 1 punkt, gdy oznaczona;
+      * brak zadań i rutyn = 0.0 (bez dzielenia przez zero).
+
+    Dzięki temu pasek rośnie płynnie po każdym podkroku, a 100% pojawia się
+    dopiero, gdy naprawdę wszystko jest zrobione. Parametr
+    `active_subtask_idx_map` zachowano dla zgodności ze starym API (ignorowany).
+    """
     total_points = len(tasks_list) + len(routines_list)
     if total_points == 0:
         return 0.0
-    done_points = 0
+    done_points = 0.0
 
     for t in tasks_list:
-        task_id, is_done, subtasks = t[0], t[3], t[5]
+        is_done, subtasks = t[3], t[5]
         if subtasks:
-            first_undone = next((i for i, st in enumerate(subtasks) if st["is_done"] == 0), len(subtasks) - 1)
-            idx = active_subtask_idx_map.get(task_id, first_undone)
-            if first_undone < idx:
-                idx = first_undone
-            if idx < len(subtasks) and subtasks[idx]["is_done"] == 1:
-                done_points += 1
-        else:
-            if is_done == 1:
-                done_points += 1
+            finished = sum(1 for st in subtasks if st.get("is_done") == 1)
+            done_points += finished / len(subtasks)
+        elif is_done == 1:
+            done_points += 1
 
     for r in routines_list:
         if r[2] == 1:
@@ -2523,6 +2731,59 @@ def build_routine_day_chips(selected, on_toggle):
             on_click=lambda e, dd=d: on_toggle(dd)
         ))
     return chips
+
+# --- SPRINT 4.1: jeden bezpieczny punkt aktualizacji UI ---
+# Aktualizacje przychodzą z wątków (sync, minutnik), więc nie wolno wołać
+# `page.update()` bezpośrednio. Zbieramy je w kolejce i wykonujemy w kontekście
+# strony (przez `page.run_thread`/`run_task`). Ten sam callback nie dubluje się,
+# dopóki poprzednia aktualizacja czeka — to „koalescencja” odświeżeń.
+_UI_QUEUE_LOCK = threading.Lock()
+_UI_QUEUE = []
+_UI_SCHEDULED = threading.Event()
+
+
+def _drain_ui_queue(page=None):
+    """Wykonuje zebrane aktualizacje UI (raz, w jednym wątku)."""
+    with _UI_QUEUE_LOCK:
+        callbacks = _UI_QUEUE[:]
+        _UI_QUEUE.clear()
+        _UI_SCHEDULED.clear()
+    for cb in callbacks:
+        try:
+            cb()
+        except Exception:
+            LOG.debug("Aktualizacja UI z kolejki nie powiodła się", exc_info=True)
+
+
+def flush_ui_queue(page=None):
+    """Wykonuje zaległe aktualizacje UI od razu (np. przed podmianą UI przy OTA)."""
+    _drain_ui_queue(page)
+
+
+def schedule_ui_update(page, callback):
+    """Kolejkuje aktualizację UI i uruchamia ją bezpiecznie.
+
+    Gdy platforma nie ma `page.run_thread`/`run_task` (np. testy), wykonujemy
+    callback od razu. Nigdy nie rzuca — błąd trafia do logu.
+    """
+    with _UI_QUEUE_LOCK:
+        if any(cb == callback for cb in _UI_QUEUE):
+            return
+        _UI_QUEUE.append(callback)
+        already = _UI_SCHEDULED.is_set()
+        _UI_SCHEDULED.set()
+    if already:
+        return
+    runner = getattr(page, "run_thread", None) or getattr(page, "run_task", None)
+    if runner is None:
+        _drain_ui_queue(page)
+        return
+    try:
+        runner(lambda: _drain_ui_queue(page))
+    except Exception:
+        LOG.debug("Nie udało się zakolejkować aktualizacji UI — wykonuję od razu", exc_info=True)
+        _drain_ui_queue(page)
+
 
 # --- INTERFEJS (Flet) ---
 def main(page: ft.Page):
@@ -2740,10 +3001,8 @@ def main(page: ft.Page):
                 timer_msg_text.value = "🔥 25 minut: głębokie skupienie (Pomodoro)"
             timer_msg_text.color = COLOR_TEXT_SECONDARY
         update_mini_timer()
-        try:
-            page.update()
-        except Exception:
-            pass
+        # Sprint 4.1: timer działa w wątku — aktualizację UI kolejkujemy bezpiecznie.
+        schedule_ui_update(page, page.update)
 
     def timer_worker():
         nonlocal timer_running, timer_seconds_left, timer_message, timer_end_ts
@@ -2899,6 +3158,8 @@ def main(page: ft.Page):
         set_config("gist_id", gist_id_input.value.strip())
         set_config("ha_url", ha_url_input.value.strip())
         set_config("sync_folder", folder_input.value.strip())
+        # Nowy tryb = nowy punkt odniesienia; stare znaczniki konfliktu nie mają sensu.
+        _reset_sync_markers()
         # Ręczne włączenie trybu = świadoma decyzja użytkownika, więc pobieramy zawsze.
         ok, msg = pull_database(force=True)
 
@@ -2920,6 +3181,12 @@ def main(page: ft.Page):
 
     def manual_sync(e=None):
         ok, msg = pull_database(force=True)
+        # Sprint 4.4: przy konflikcie nie wysyłamy lokalnej bazy nad zdalną.
+        if get_sync_conflict():
+            status_text.value = ""
+            warning_text.value = "⚠️ Wykryto konflikt synchronizacji — wybierz wersję w panelu."
+            refresh_view()
+            return
         if ok:
             push_ok, push_msg = push_database()
             status_text.value = f"✓ {push_msg or msg}"
@@ -2933,6 +3200,17 @@ def main(page: ft.Page):
         """Change to local-only sync mode with confirmation message."""
         change_sync_mode("none")
         status_text.value = "✓ Zapisano tylko lokalnie"
+        refresh_view()
+
+    def _resolve_conflict_click(choice):
+        """Obsługa przycisków panelu konfliktu synchronizacji (sprint 4.4)."""
+        ok, msg = resolve_sync_conflict(choice)
+        if ok:
+            status_text.value = f"✓ {msg}"
+            warning_text.value = ""
+        else:
+            status_text.value = ""
+            warning_text.value = f"⚠️ {msg}"
         refresh_view()
 
     def trigger_manual_ota(e=None):
@@ -4116,9 +4394,16 @@ def main(page: ft.Page):
                 sync_badge_text.color = COLOR_PRIO_B
                 sync_badge_icon.name = ft.Icons.CLOUD_UPLOAD
                 sync_badge_icon.color = COLOR_PRIO_B
-            page.update()
+            elif status == "conflict":
+                sync_badge_text.value = "Konflikt sync"
+                sync_badge_text.color = COLOR_PRIO_A
+                sync_badge_icon.name = ft.Icons.WARNING_AMBER_ROUNDED
+                sync_badge_icon.color = COLOR_PRIO_A
+                warning_text.value = "⚠️ Wykryto konflikt synchronizacji — wybierz wersję w panelu."
+            # Callback przychodzi z wątku synchronizacji — kolejkujemy odświeżenie.
+            schedule_ui_update(page, page.update)
         except Exception:
-            pass
+            LOG.debug("Nie udało się odświeżyć badge'a synchronizacji", exc_info=True)
 
     register_sync_status_callback(on_sync_state)
 
@@ -4730,8 +5015,13 @@ def main(page: ft.Page):
             progress_bar.value = prog_val
             progress_bar.color = COLOR_SUCCESS
             progress_bar.bgcolor = COLOR_BG_SURFACE
-            progress_text.value = f"{int(prog_val * 100)}% ukończone"
-            progress_text.color = COLOR_SUCCESS if prog_val >= 1.0 else COLOR_TEXT_PRIMARY
+            if not all_view_tasks and not all_routines:
+                # Sprint 4.2: puste Daily nie pokazuje mylącego „0% ukończone”.
+                progress_text.value = "Brak zadań na dziś"
+                progress_text.color = COLOR_TEXT_SECONDARY
+            else:
+                progress_text.value = f"{int(prog_val * 100)}% ukończone"
+                progress_text.color = COLOR_SUCCESS if prog_val >= 1.0 else COLOR_TEXT_PRIMARY
             progress_text.weight = ft.FontWeight.BOLD
 
             for r in all_routines:
@@ -5711,9 +6001,53 @@ def main(page: ft.Page):
                 ], alignment=ft.MainAxisAlignment.END)
             )
 
+        # Sprint 4.4: panel konfliktu synchronizacji — świadoma decyzja, bez cichej straty.
+        if get_sync_conflict():
+            content_column.controls.append(
+                ft.Container(
+                    bgcolor="#ef444422",
+                    border=ft.Border.all(1, COLOR_PRIO_A),
+                    border_radius=12,
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, size=18, color=COLOR_PRIO_A),
+                            ft.Text("Wykryto konflikt synchronizacji", size=13,
+                                    weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY),
+                        ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Text(
+                            "Lokalna i zdalna baza zmieniły się od ostatniej synchronizacji. "
+                            "Wybierz, którą wersję zachować — nic nie zostanie nadpisane bez Twojej decyzji.",
+                            size=11, color=COLOR_TEXT_SECONDARY),
+                        ft.Row([
+                            ft.Button("Zachowaj lokalną", icon=ft.Icons.UPLOAD,
+                                      bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                                      on_click=lambda e: _resolve_conflict_click("keep_local")),
+                            ft.Button("Pobierz zdalną", icon=ft.Icons.DOWNLOAD,
+                                      bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                                      on_click=lambda e: _resolve_conflict_click("keep_remote")),
+                            ft.Button("Przywróć snapshot", icon=ft.Icons.RESTORE,
+                                      bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_SECONDARY,
+                                      on_click=lambda e: _resolve_conflict_click("restore_snapshot")),
+                        ], wrap=True, spacing=8),
+                    ], spacing=8)
+                )
+            )
+
         page.update()
 
-    page.on_resize = lambda e: refresh_view()
+    # Sprint 4.1: przebudowa widoku tylko przy zmianie progu `is_mobile()` (650 px),
+    # a nie przy każdym pikselu zmiany rozmiaru okna.
+    last_is_mobile = [is_mobile()]
+
+    def on_page_resize(e=None):
+        now_mobile = is_mobile()
+        if now_mobile == last_is_mobile[0]:
+            return
+        last_is_mobile[0] = now_mobile
+        refresh_view()
+
+    page.on_resize = on_page_resize
     page.add(ft.SafeArea(content=root_layout, expand=True))
     refresh_view()
 
@@ -5742,7 +6076,7 @@ def main(page: ft.Page):
                 try:
                     refresh_view()
                 except Exception:
-                    pass
+                    LOG.debug("Nie udało się odświeżyć widoku po startowym pullu", exc_info=True)
         except Exception:
             LOG.exception("Błąd startowego pobierania bazy")
         finally:
