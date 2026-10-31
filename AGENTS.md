@@ -7,7 +7,7 @@ Osobisty menedżer zadań dla osób z ADHD: **Python + Flet 1.0.4 + SQLite**, dz
 ## Komendy
 
 ```powershell
-python -m pytest test_app.py -q                       # całość (67 testów, ~16 s)
+python -m pytest test_app.py -q                       # całość (77 testów, ~18 s)
 python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 .\.venv\Scripts\flet.exe run main.py                  # uruchomienie na PC
 ```
@@ -21,9 +21,9 @@ python -m pytest test_app.py -q -k test_tasks_crud    # pojedynczy test
 | Plik | Odpowiedzialność |
 |---|---|
 | `main.py` | Entrypoint: OTA z GitHuba, splash, wybór modułu (`app_logic_ota.py` albo wbudowany `app_logic`), rollback, ekran błędu. Na końcu re-eksport symboli `app_logic` **bez** `main` (dawniej `from app_logic import *` nadpisywał entrypoint). |
-| `app_logic.py` | ~4400 linii: schemat i operacje SQLite, konfiguracja, snapshoty, backup/import JSON, synchronizacja (Gist/HA/folder), logowanie, instalacja/aktywacja OTA oraz cały interfejs Flet w `main(page)`. |
-| `test_app.py` | 67 testów: CRUD, rutyny (w tym dni tygodnia), migracje schematu starych baz, podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile (w tym edycja z Daily z zachowaniem kategorii, usuwanie z „Cofnij”, obszary dotykowe 44 px na 400 px), wibracja z mockiem `HapticFeedback`, mini-minutnik, OTA (wybór wersji, instalacja, aktywacja, rollback). `DummyPage` + tymczasowe bazy. |
-| `version.txt` | Aktualna wersja (1.6.25). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
+| `app_logic.py` | ~5300 linii: schemat i operacje SQLite, konfiguracja, snapshoty, backup/import JSON, synchronizacja (Gist/HA/folder), logowanie, instalacja/aktywacja OTA oraz cały interfejs Flet w `main(page)`. |
+| `test_app.py` | 77 testów: CRUD, rutyny (w tym dni tygodnia), migracje schematu starych baz, podkroki, postęp, archiwum, snapshoty, integralność bazy, Gist (mock), UI PC/mobile (w tym edycja z Daily z zachowaniem kategorii, usuwanie z „Cofnij”, obszary dotykowe 44 px na 400 px), wibracja z mockiem `HapticFeedback`, mini-minutnik, OTA (wybór wersji, instalacja, aktywacja, rollback), przełom dnia (`get_pending_day_rollover`/`apply_day_rollover`, UI `overlay[10]`) i Inbox z triagem. `DummyPage` + tymczasowe bazy. |
+| `version.txt` | Aktualna wersja (1.6.26). Musi być równa `FALLBACK_VERSION` w `app_logic.py` (pilnuje tego test). |
 | `.github/workflows/build.yml` | CI: pytest → APK → Release `latest`. |
 | `assets/icon.png` | Ikona aplikacji. |
 | `FIX_SUMMARY.md`, `README_OTA_FIX.md` | Historyczne, opisują stan 1.6.17 — nieaktualne. |
@@ -41,6 +41,7 @@ main.py::main → load_and_run()          (jedyny loader; nie ma drugiej ścież
   └─ app_logic.main(page)
        ├─ init_db() (+ init_config_db())
        ├─ refresh_view() → przebudowa kontrolek
+       ├─ _maybe_start_day_rollover() → dialog przełomu dnia (2.1) albo auto-tryb
        ├─ akcje → db_connection(write=True) → push_database_async()
        ├─ Ustawienia → trigger_manual_ota() → install_ota_code() + activate_downloaded_ota()
        └─ wątek startup_pull → pull_database(force=False)
@@ -51,6 +52,8 @@ main.py::main → load_and_run()          (jedyny loader; nie ma drugiej ścież
 - Tabele: `tasks`, `routines`, `completed_archive` w `tasks.db`; `config` w `app_config.db`. Podkroki to JSON w kolumnie `subtasks`.
 - Kolejność kolumn `get_tasks()` (używana w testach): `0 id, 1 title, 2 is_daily, 3 is_done, 4 priority, 5 subtasks, 6 category, 7 deadline`. `deadline` to opcjonalna data ISO `YYYY-MM-DD` (bez godziny); `None` = brak terminu.
 - Terminy: `add_task_db(..., deadline=...)`, `set_task_deadline_db()`, `get_task_deadline()`, `update_task_details_db(..., deadline=DEADLINE_UNSET)` (sentinel = nie zmieniaj, `None` = wyczyść). Sortowanie/filtr w Master: `master_sort_mode` (`DEFAULT`/`DEADLINE`) i `master_deadline_filter` (`ALL`/`WEEK`/`OVERDUE`) w config. Przypomnienia: `deadline_reminders_enabled`, `deadline_reminder_days` (14/7/3), `deadline_reminder_repeat_day_before`, `deadline_card_hidden_date`.
+- Przełom dnia (2.1): `get_pending_day_rollover()` (tylko czyta — `None`, gdy `last_reset_date` == dziś albo brak znacznika) i `apply_day_rollover(decisions, mode)` (snapshot `pre_day_rollover`, archiwizuje zrobione dokładnie raz, usuwa je z `tasks`, ustawia `last_reset_date` = dziś, `push_database_async()`). Decyzje to mapa `{task_id: "keep"|"master"|"remove"}`; zadanie bez decyzji = „keep”. Tryb w config `day_rollover_mode` = `ask` (domyślnie) / `auto_keep` / `auto_master` (`get_day_rollover_mode()` normalizuje śmieci do `ask`). `end_of_day_db()` zostaje bez zmian (zgodność i starsze testy).
+- Inbox (2.3): stała `INBOX_CATEGORY = "📥 Inbox"` (bez zmian schematu). Szybki zrzut (`save_quick_dump`, Daily `save_inline_input`) trafia do Inbox z `priority="C"`, `is_daily=False`. `get_inbox_tasks()` filtruje po kategorii, a `triage_inbox_task_db(task_id, category, priority, is_daily, deadline)` przenosi zadanie do wybranej kategorii (`Inbox` spada do `Ogólne`) i kończy `push_database_async()`. Zadania z Inbox są wykluczone z listy Master i pokazywane w sekcji triage'u (ukrytej, gdy pusta).
 - Rutyny: `routines.routine_days` to JSON z intami `0..6` (0 = poniedziałek … 6 = niedziela, konwencja `datetime.weekday()`); `[]` = codziennie, a rutyny zapisane przed tą kolumną są traktowane jak codzienne. `get_routines()` zwraca krotki `(id, title, is_done, days)`, zapis przez `add_routine_db(title, days=None)` / `update_routine_db(id, title, days=None)` (ta druga obsługuje edycję z Ustawień), a widok Daily filtruje rutyny przez `get_daily_routines()`. JSON export/import przenosi `days`.
 - Folder danych: `%USERPROFILE%\.master_adhd_data\` (Android: `FLET_APP_STORAGE_DATA/.master_adhd_data`). Tam też `master_adhd.log`, `snapshots/`, pliki OTA.
 - Zapis wyłącznie przez `db_connection(write=True)` (WAL, `busy_timeout`, `RLock`, zawsze `close()`). `write=True` przy `LOCAL_DB` przesuwa `db_last_change` — bez tego zmiana nie jest widoczna dla rozstrzygania konfliktów synchronizacji.
@@ -87,7 +90,7 @@ Trzy tryby w `config["sync_mode"]`: `gist`, `ha_server`, `folder` (domyślnie `n
 
 - Nowe widżety: używaj stałych `COLOR_BG_MAIN/CARD/SURFACE/BORDER`, `COLOR_PRIO_A/B/C`, `COLOR_SUCCESS`, `COLOR_TEXT_PRIMARY/SECONDARY` z `app_logic.py`, nie literalnych hexów.
 - `is_mobile()` to szerokość < 650 px (`page.width` lub `page.window.width`); testy używają 950 (PC) i 400 (mobile). PC: `Row(sidebar, content_area)`, mobile: `Column(content_area, bottom_nav)`.
-- `page.overlay` ma 10 dialogów; kolejność jest kontraktem testów (`[3]` edycja zadania, `[4]` usuwanie, `[5]` edycja podkroku, `[9]` edycja rutyny) — nowe okna tylko na końcu listy. Dialog usuwania (`overlay[4]`) **istnieje nadal** (kontrakt testów i operacje zbiorcze), ale karty zadań go nie otwierają.
+- `page.overlay` ma 11 dialogów; kolejność jest kontraktem testów (`[3]` edycja zadania, `[4]` usuwanie, `[5]` edycja podkroku, `[9]` edycja rutyny, `[10]` przełom dnia) — nowe okna tylko na końcu listy. Dialog usuwania (`overlay[4]`) **istnieje nadal** (kontrakt testów i operacje zbiorcze), ale karty zadań go nie otwierają. Dialog „Koniec dnia” (`overlay[7]`) też został jako kontrakt — wyparty przez `day_rollover_dialog`, `open_end_of_day_dialog` nie ma już wołających.
 - Usuwanie zadania/podkroku z karty jest **natychmiastowe** (`delete_task_now` / `delete_subtask_now`) i pokazuje `ft.SnackBar` „Usunięto «…». Cofnij”. Cofnięcie przywraca pełny wiersz zadania (`restore_task_row_db`, `INSERT OR IGNORE` — to samo `id`, kategoria, priorytet, termin, podkroki) albo podkrok na tej samej pozycji (`restore_subtask_db`); drugie kliknięcie „Cofnij” nie duplikuje rekordu. Dialog zostaje tylko dla akcji nieodwracalnych zbiorczo (np. czyszczenie archiwum, import zastępujący dane). `open_delete_task_dialog` nie ma już wołających — trzyma go tylko kontrakt `overlay[4]`.
 - Wibracja: `init_haptic_service(page)` dodaje `ft.HapticFeedback` do `page.services` **tylko na platformach mobilnych** (`page.platform`); `trigger_haptic_feedback(page, service, kind)` wywołuje metodę przez `page.run_task` i respektuje `sound_enabled`. Brak klasy/usługi/uprawnień = ciche pominięcie (log `debug`), nigdy crash. Na Windows `None`. Sygnały: `timer_done`→`vibrate`, `task_done`→`light_impact`, `undo`→`selection_click`. Używać razem z `play_sound_feedback` (dźwięk na PC).
 - Dotyk (mobile): stała `TOUCH_TARGET_MIN = 44`. W `refresh_view` jest lokalny helper `_touch(default)`, który na telefonie zwraca 44, a na PC `default`. Wszystkie akcje-ikony w kartach (edytuj/usuń/dodaj krok, strzałki kroków) oraz nagłówek, szybkie dodawanie i przyciski minutnika są nim objęte — test `test_mobile_touch_targets_at_400px`.
@@ -107,6 +110,10 @@ ZASADA GIT: Po wykonaniu git commit i git push NIGDY nie uruchamiaj gh run watch
 - **`no such column: routine_days`** (crash widoku po starcie/pullu) = baza bez nowej kolumny, np. kopia z chmury/snapshotu sprzed 1.6.21. `get_routines()` sama domyka schemat i ponawia `SELECT` (ostatecznie czyta bez dni tygodnia), ale każde nowe miejsce podmieniające plik `LOCAL_DB` musi wołać `ensure_schema_upgrade()`. Uwaga: stary wzorzec `ALTER TABLE ... except sqlite3.OperationalError: pass` połykał także „database is locked”, więc migracja mogła cicho nie wykonać się wcale — `_ensure_column()` sprawdza `PRAGMA table_info` i loguje realne błędy.
 - W APK, które użytkownicy mają **przed** wersją 1.6.19, działa stary, zepsuty loader. Pierwsza naprawa wymaga jednorazowej instalacji nowego APK; dopiero potem OTA działa automatycznie.
 - **Minutnik po zminimalizowaniu aplikacji nie da sygnału.** To świadoma decyzja: aplikacja nie używa powiadomień systemowych ani `AlarmManager`. Nie dodawaj `flet-notifications`/`flet-audio` „przy okazji” i nie traktuj braku sygnału w tle jako regresji. W otwartej aplikacji sygnałem ma być wibracja/dźwięk (zadanie 1.1).
+- **Przełom dnia a `end_of_day_db()`.** Stara funkcja `end_of_day_db()` nadal istnieje i zachowuje się jak dawniej (niezrobione dzienne → `is_daily=0`) — korzystają z niej starsze testy i „Koniec dnia” z dialogu `overlay[7]`. Nowy UI (Daily: przycisk „🌅 Nowy dzień / Koniec dnia”, karta w Ustawieniach) używa `day_rollover_dialog` i `apply_day_rollover(...)`, gdzie niezrobione zadania zostają na Daily, dopóki użytkownik nie zdecyduje. Nie podmieniaj `end_of_day_db()` na nową logikę — złamie to `test_end_of_day`.
+- **Pierwsze uruchomienie nie pokazuje dialogu przełomu.** Gdy `last_reset_date` jest pusty (świeża instalacja), `_maybe_start_day_rollover()` cicho ustawia go na dziś i kończy — bez modala. Dialog pojawia się dopiero, gdy data faktycznie się zmieni.
+- **Sekcja Inbox to `ft.Container`, nie `ft.Column`.** Testy znajdują kolumnę kart przez `[c for c in content_col.controls if isinstance(c, ft.Column)][0]`; gdyby sekcja Inbox była `Column` na Master, podmieniłaby `tasks_column`. Trzymaj ją jako kontener, a listę Inbox w środku.
+- Kolejność `content_column.controls` na Daily jest kontraktem: `[2]` = karta minutnika, `[3]` = karta postępu. Nie wstawiaj nowych elementów przed nimi (`test_archive_and_timer_ui`, `test_mobile_touch_targets_at_400px`).
 
 ---
 
@@ -116,7 +123,7 @@ Plan spisany przy **v1.6.23** (2026-10-29). Numeracja linii dotyczy tej wersji i
 
 ### Co już działa i ma zostać
 
-Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), rutyny z dniami tygodnia, podkroki z kolejnością, spokojna karta terminów (bez wyskakujących okien), archiwum sukcesów, snapshoty + rotacja, OTA z rollbackiem, trzy tryby synchronizacji. Tego nie przeprojektowujemy — nowe funkcje mają się do tego dopinać.
+Szybki zrzut myśli (`save_quick_dump` → Inbox), limit zadań „A” (`max_a_limit`), rutyny z dniami tygodnia, podkroki z kolejnością, spokojna karta terminów (bez wyskakujących okien), archiwum sukcesów, snapshoty + rotacja, OTA z rollbackiem, trzy tryby synchronizacji, świadomy przełom dnia i Inbox z triagem (od 1.6.26). Tego nie przeprojektowujemy — nowe funkcje mają się do tego dopinać.
 
 ### Zasady pracy z planem
 
@@ -124,7 +131,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 2. **Zmiany w `main.py` wymagają nowego APK.** Wszystko, co ma dotrzeć przez OTA, musi być w `app_logic.py` (albo w nowym pliku ładowanym przez `app_logic`). Jeśli sprint wymaga `main.py`, zaplanuj wydanie APK i napisz to w opisie.
 3. **Każda zmiana schematu** = `ensure_schema()` + `ensure_schema_upgrade()` po każdej podmianie pliku bazy + eksport/import JSON + test migracji starej bazy. Nowe kolumny dopisuj **na końcu** `SELECT` w `get_tasks()` (testy używają pozycji 0–7) albo dodaj osobny getter.
 4. **Każdy zapis do bazy** kończy się `push_database_async()`.
-5. **Nowe okna** dopisuj na końcu `page.overlay` (obecnie 10 dialogów; indeksy 3/4/5/9 są kontraktem testów).
+5. **Nowe okna** dopisuj na końcu `page.overlay` (obecnie 11 dialogów; indeksy 3/4/5/9 są kontraktem testów).
 6. **Nie zwiększaj liczby widoków bez potrzeby** — testy indeksują sidebar i dolną nawigację. Preferuj pełnoekranowe nakładki i sekcje w istniejących widokach.
 7. **Wszystko opcjonalne musi degradować się łagodnie**: brak wsparcia platformy, brak uprawnień, brak pliku → log + działanie jak dziś, nigdy crash.
 8. **Naprawiając znaną pułapkę**, usuń ją z sekcji „Znane pułapki” i dopisz, co ją zastąpiło.
@@ -135,7 +142,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 | Sprint | Cel | Rozmiar | Status |
 |---|---|---|---|
 | 1. Mniej tarcia | Cofanie pomyłek, czytelność, timer widoczny w każdym widoku | S/M | gotowy (1.6.25) — 1.1–1.5 wdrożone |
-| 2. Rytuał dnia i „Co teraz?” | Mniej decyzji, jedno zadanie na raz, świadomy przełom dnia | M | do zrobienia |
+| 2. Rytuał dnia i „Co teraz?” | Mniej decyzji, jedno zadanie na raz, świadomy przełom dnia | M | częściowo (1.6.26) — 2.1 i 2.3 wdrożone; 2.2 pominięty decyzją użytkownika |
 | 3. Pamięć i refleksja | Historia rutyn, statystyki, czas szacowany, tygodniowy przegląd | M | do zrobienia |
 | 4. Niezawodność i bezpieczeństwo | Wątki, postęp, podpis OTA, konflikty synchronizacji | M/L | do zrobienia |
 
@@ -234,11 +241,13 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 
 ## Sprint 2 — „Rytuał dnia i Co teraz?”
 
+> **Stan (1.6.26):** wdrożone 2.1 (świadomy przełom dnia) i 2.3 (Inbox + triage). Krok **2.2 („Co teraz?” / tryb fokusu) został świadomie pominięty** decyzją użytkownika — nie implementuj go bez nowej decyzji. Z tego powodu nagłówek sprintu mówi jeszcze „Co teraz?”, ale ta część nie istnieje w kodzie.
+
 **Cel:** zmniejszyć liczbę decyzji. Dzień ma się zaczynać i kończyć jednym świadomym gestem, a w ciągu dnia ma być widoczne **jedno** zadanie, nie lista.
 
 ### 2.1. Świadomy przełom dnia (bez gubienia zadań)
 
-`P0 · M · Status: do zrobienia`
+`P0 · M · Status: gotowe (1.6.26)`
 
 **Problem.** `end_of_day_db()` (app_logic.py:1710) przenosi zrobione zadania do archiwum, a **niezrobione dzienne zadania zdejmuje z Daily** (`is_daily=0`) bez pytania. Jeśli użytkownik nie kliknie „Koniec dnia”, karta nowego dnia pojawia się dopiero przy kolejnym uruchomieniu i tylko informuje, że „ostatni reset był wcześniej” (app_logic.py:4335). Stan dnia się rozjeżdża, postęp traci sens, a zadania znikają z pola widzenia.
 
@@ -264,7 +273,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 
 ### 2.2. Tryb „Co teraz?” (fokus na jednym zadaniu)
 
-`P1 · M · Status: do zrobienia`
+`P1 · M · Status: pominięty (decyzja użytkownika, 1.6.26)` — nie implementować.
 
 **Problem.** Daily to lista: 3 × A, B, C, rutyny, przypomnienia, filtry. Dla osoby z ADHD lista sama w sobie jest źródłem paraliżu decyzyjnego. Aplikacja ma limit „A”, ale nie ma ekranu, który mówi: **to jedno zadanie, teraz, pierwszy krok, start**.
 
@@ -288,7 +297,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 
 ### 2.3. Inbox i 2-minutowy triage
 
-`P1 · M · Status: do zrobienia`
+`P1 · M · Status: gotowe (1.6.26)`
 
 **Problem.** `save_quick_dump` (app_logic.py:2283) wrzuca każdą myśl od razu do Master jako priorytet B i kategorię „Ogólne”. Master puchnie, a użytkownik później nie wie, co jest ważne. Zrzut myśli ma być szybki, ale porządkowanie nie może się dziać w tym samym momencie.
 
@@ -498,7 +507,7 @@ Szybki zrzut myśli (`save_quick_dump`), limit zadań „A” (`max_a_limit`), r
 ## Definicja ukończenia (dla każdego zadania)
 
 - [ ] Kod w `app_logic.py` (lub nowym pliku) + brak zmian wymagających `main.py`, albo jasno opisane, że potrzebny jest APK.
-- [ ] Testy: nowe przypadki dopisane do `test_app.py` (jeden plik) + cały `pytest` zielony (67+).
+- [ ] Testy: nowe przypadki dopisane do `test_app.py` (jeden plik) + cały `pytest` zielony (77+).
 - [ ] Sprawdzone na PC (950 px) i mobile (400 px) — układ, dialogi, `page.overlay`.
 - [ ] Migracja schematu + eksport/import JSON, jeśli zmieniono dane.
 - [ ] `push_database_async()` w każdej nowej ścieżce zapisu.

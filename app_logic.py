@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import flet as ft
 
-FALLBACK_VERSION = "1.6.25"
+FALLBACK_VERSION = "1.6.26"
 # Źródło aktualizacji OTA — musi być identyczne z GITHUB_RAW_BASE w main.py.
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/DemonSwans/MasterADHD/master"
 
@@ -43,6 +43,15 @@ DB_BUSY_TIMEOUT_MS = 5000
 SNAPSHOT_LIMIT = 10
 ARCHIVE_LIMIT = 2000
 SYNC_DEBOUNCE_SECONDS = 1.5
+
+# --- SPRINT 2: rytuał dnia (2.1) i Inbox (2.3) ---
+# Kategoria systemowa, do której trafiają szybkie zrzuty myśli (bez zmiany schematu).
+INBOX_CATEGORY = "📥 Inbox"
+# Tryb przełomu dnia: pytaj użytkownika (domyślnie) albo decyduj automatycznie.
+DAY_ROLLOVER_ASK = "ask"
+DAY_ROLLOVER_AUTO_KEEP = "auto_keep"
+DAY_ROLLOVER_AUTO_MASTER = "auto_master"
+DAY_ROLLOVER_MODES = (DAY_ROLLOVER_ASK, DAY_ROLLOVER_AUTO_KEEP, DAY_ROLLOVER_AUTO_MASTER)
 
 # Jeden zamek na całą bazę. SQLite i tak serializuje zapisy, a dzięki temu
 # wątek synchronizacji nie walczy z UI o plik (koniec "database is locked").
@@ -1883,6 +1892,118 @@ def end_of_day_db(keep_archive=ARCHIVE_LIMIT):
     push_database_async()
 
 
+# --- SPRINT 2.1: ŚWIADOMY PRZEŁÓW DNIA (bez gubienia zadań) ---
+def get_day_rollover_mode():
+    """Tryb przełomu dnia: `ask` (pytaj), `auto_keep`, `auto_master`."""
+    mode = (get_config("day_rollover_mode", DAY_ROLLOVER_ASK) or DAY_ROLLOVER_ASK).strip()
+    return mode if mode in DAY_ROLLOVER_MODES else DAY_ROLLOVER_ASK
+
+
+def get_pending_day_rollover(today=None):
+    """Zwraca stan „nowego dnia” do rozstrzygnięcia albo None.
+
+    None oznacza, że dzień jest już zamknięty (`last_reset_date` == dziś) albo
+    aplikacja startuje pierwszy raz (brak znacznika). Funkcja tylko czyta bazę —
+    niczego nie zmienia, więc „Później”/anulowanie zostawia wszystko jak jest.
+    """
+    today_str = (today or date.today()).isoformat()
+    try:
+        last_reset = get_config("last_reset_date", "")
+    except Exception:
+        last_reset = ""
+    if not last_reset or last_reset == today_str:
+        return None
+    all_tasks = get_tasks(is_daily_view=False)
+    done_tasks = [t for t in all_tasks if t[3]]
+    # „Niezrobione z Daily” to dokładnie te, które stary `end_of_day_db()` cicho
+    # zdejmował z listy (is_daily=1, is_done=0). Teraz to użytkownik decyduje.
+    undone_daily = [t for t in all_tasks if t[2] and not t[3]]
+    return {
+        "last_reset": last_reset,
+        "today": today_str,
+        "done_count": len(done_tasks),
+        "undone_daily": undone_daily,
+    }
+
+
+def apply_day_rollover(decisions=None, mode=None, today=None):
+    """Wykonuje świadomy przełom dnia i zwraca podsumowanie (albo None).
+
+    `decisions` to mapa {task_id: "keep"|"master"|"remove"}. Zadania bez decyzji
+    zostają na Daily — żadne zadanie nie ginie po cichu. `mode`
+    ("auto_keep"/"auto_master") pozwala pominąć decyzje użytkownika.
+    Zrobione zadania trafiają do archiwum dokładnie raz: po archiwizacji są
+    usuwane, a `last_reset_date` ustawiany na dziś, więc kolejne wywołanie nie ma
+    już nic do zrobienia (żadnych duplikatów w Dzienniku Sukcesów).
+    """
+    today_str = (today or date.today()).isoformat()
+    if not get_pending_day_rollover(today):
+        return None
+    decisions = decisions or {}
+    mode = mode or get_day_rollover_mode()
+    if mode not in DAY_ROLLOVER_MODES:
+        mode = DAY_ROLLOVER_ASK
+
+    make_local_snapshot("pre_day_rollover")
+    with db_connection(write=True) as conn:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        done_rows = conn.execute("SELECT title, priority FROM tasks WHERE is_done = 1").fetchall()
+        for row in done_rows:
+            conn.execute(
+                "INSERT INTO completed_archive (title, priority, completed_at) VALUES (?, ?, ?)",
+                (row[0], row[1], now_str)
+            )
+        archived = len(done_rows)
+        conn.execute("DELETE FROM tasks WHERE is_done = 1")
+        undone_rows = conn.execute(
+            "SELECT id FROM tasks WHERE is_daily = 1 AND is_done = 0").fetchall()
+        kept = 0
+        to_master = 0
+        for (task_id,) in undone_rows:
+            choice = decisions.get(task_id, "keep")
+            if mode == DAY_ROLLOVER_AUTO_MASTER:
+                choice = "master"
+            if choice in ("master", "remove"):
+                conn.execute("UPDATE tasks SET is_daily = 0 WHERE id = ?", (task_id,))
+                to_master += 1
+            else:
+                kept += 1
+        conn.execute("UPDATE routines SET is_done = 0")
+        conn.execute(
+            "DELETE FROM completed_archive WHERE id NOT IN "
+            "(SELECT id FROM completed_archive ORDER BY id DESC LIMIT ?)",
+            (ARCHIVE_LIMIT,)
+        )
+    set_config("last_reset_date", today_str)
+    push_database_async()
+    return {"archived": archived, "kept": kept, "to_master": to_master, "today": today_str}
+
+
+# --- SPRINT 2.3: INBOX I 2-MINUTOWY TRIAGE ---
+def get_inbox_tasks():
+    """Zadania czekające w Inbox (szybkie zrzuty myśli; bez zmian w schemacie)."""
+    try:
+        return [t for t in get_tasks(is_daily_view=False) if (t[6] or "") == INBOX_CATEGORY]
+    except Exception:
+        LOG.exception("Nie udało się odczytać Inbox")
+        return []
+
+
+def triage_inbox_task_db(task_id, category="Ogólne", priority="B", is_daily=False, deadline=None):
+    """Przenosi zadanie z Inbox do wybranej kategorii/priorytetu (2-minutowy triage)."""
+    category = (category or "").strip() or "Ogólne"
+    if category == INBOX_CATEGORY:
+        category = "Ogólne"
+    priority = priority if priority in ("A", "B", "C") else "B"
+    with db_connection(write=True) as conn:
+        ensure_schema(conn)
+        conn.execute(
+            "UPDATE tasks SET category = ?, priority = ?, is_daily = ?, deadline = ? WHERE id = ?",
+            (category, priority, int(bool(is_daily)), normalize_deadline(deadline), task_id)
+        )
+    push_database_async()
+
+
 def calculate_progress_logic(tasks_list, routines_list, active_subtask_idx_map=None):
     if active_subtask_idx_map is None:
         active_subtask_idx_map = {}
@@ -2554,8 +2675,9 @@ def main(page: ft.Page):
         if not val:
             return
         if current_view == "daily":
-            add_task_db(val, is_daily=False, priority="B")
-            status_text.value = "✓ Zapisano myśl w Master liście"
+            # Sprint 2.3: zrzut myśli ląduje w Inbox (priorytet C), nie zaśmieca Mastera.
+            add_task_db(val, is_daily=False, priority="C", category=INBOX_CATEGORY)
+            status_text.value = "✓ Zapisano w Inbox"
         else:
             add_task_db(val, is_daily=False, priority="B")
             status_text.value = "✓ Dodano zadanie"
@@ -2565,15 +2687,16 @@ def main(page: ft.Page):
     inline_input_field.on_submit = save_inline_input
 
     # --- OKIENKA DIALOGOWE ---
-    quick_dump_field = ft.TextField(hint_text="Myśl do Master listy...", autofocus=True,
+    quick_dump_field = ft.TextField(hint_text="Myśl do Inbox...", autofocus=True,
                                     on_submit=lambda e: save_quick_dump())
 
     def save_quick_dump(e=None):
         if quick_dump_field.value.strip():
-            add_task_db(quick_dump_field.value.strip(), is_daily=False, priority="B")
+            add_task_db(quick_dump_field.value.strip(), is_daily=False, priority="C",
+                        category=INBOX_CATEGORY)
             quick_dump_field.value = ""
             quick_dialog.open = False
-            status_text.value = "✓ Zapisano w Masterzie"
+            status_text.value = "✓ Zapisano w Inbox"
             refresh_view()
 
     quick_dialog = ft.AlertDialog(title=ft.Text("⚡ Szybki zrzut"), content=quick_dump_field,
@@ -3141,16 +3264,270 @@ def main(page: ft.Page):
         ]
     )
 
+    # --- SPRINT 2.1: PRZEŁÓW DNIA (spokojny wybór zamiast cichego gubienia zadań) ---
+    rollover_choice = {}
+    rollover_state = {"info": None, "tasks": []}
+
+    def _rollover_pill(label, is_active, on_click):
+        return ft.Container(
+            content=ft.Text(label, size=11, weight=ft.FontWeight.BOLD,
+                            color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+            bgcolor="#3b82f633" if is_active else "#21262d",
+            border=ft.Border.all(1, COLOR_PRIO_B if is_active else COLOR_BG_BORDER),
+            border_radius=8,
+            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+            on_click=on_click
+        )
+
+    def _set_rollover_choice(task_id, choice):
+        rollover_choice[task_id] = choice
+        _render_rollover()
+        page.update()
+
+    def _rollover_bulk(choice):
+        for t in rollover_state["tasks"]:
+            rollover_choice[t[0]] = choice
+        _render_rollover()
+        page.update()
+
+    def _rollover_choice_row(task):
+        tid, title = task[0], task[1]
+        current = rollover_choice.get(tid, "keep")
+        return ft.Container(
+            bgcolor=COLOR_BG_SURFACE,
+            border=ft.Border.all(1, COLOR_BG_BORDER),
+            border_radius=10,
+            padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+            content=ft.Column([
+                ft.Text(title, size=13, color=COLOR_TEXT_PRIMARY, weight=ft.FontWeight.W_500,
+                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Row([
+                    _rollover_pill("Zostaw na dziś", current == "keep",
+                                   lambda e, t=tid: _set_rollover_choice(t, "keep")),
+                    _rollover_pill("Wróć do Mastera", current == "master",
+                                   lambda e, t=tid: _set_rollover_choice(t, "master")),
+                    _rollover_pill("Usuń z Daily", current == "remove",
+                                   lambda e, t=tid: _set_rollover_choice(t, "remove")),
+                ], spacing=4, wrap=True)
+            ], spacing=6, tight=True)
+        )
+
+    def _render_rollover():
+        info = rollover_state.get("info") or {}
+        tasks = rollover_state.get("tasks") or []
+        rows = [_rollover_choice_row(t) for t in tasks]
+        body = [
+            ft.Text(
+                f"Zrobione wczoraj: {info.get('done_count', 0)} → Dziennik Sukcesów.",
+                size=12, color=COLOR_TEXT_SECONDARY
+            ),
+            ft.Text(
+                "Niezrobione zadania z Daily — zdecyduj, co z nimi. Nic nie zniknie po cichu.",
+                size=12, color=COLOR_TEXT_PRIMARY
+            ),
+        ]
+        if rows:
+            body.extend(rows)
+            body.append(
+                ft.Row([
+                    ft.TextButton("Wszystkie zostaw", on_click=lambda e: _rollover_bulk("keep")),
+                    ft.TextButton("Wszystkie do Mastera", on_click=lambda e: _rollover_bulk("master")),
+                ], spacing=6)
+            )
+        else:
+            body.append(ft.Text("Brak niezrobionych zadań z Daily.", size=12,
+                                color=COLOR_TEXT_SECONDARY))
+        day_rollover_dialog.content = ft.Column(body, tight=True, spacing=8,
+                                                scroll=ft.ScrollMode.AUTO, height=380)
+
+    def open_day_rollover(e=None):
+        info = get_pending_day_rollover()
+        if not info:
+            return
+        rollover_state["info"] = info
+        rollover_state["tasks"] = list(info["undone_daily"])
+        rollover_choice.clear()
+        for t in rollover_state["tasks"]:
+            rollover_choice[t[0]] = "keep"
+        _render_rollover()
+        day_rollover_dialog.open = True
+        page.update()
+
+    def close_day_rollover(e=None):
+        # „Później” niczego nie zmienia — dzień zostaje otwarty.
+        day_rollover_dialog.open = False
+        rollover_choice.clear()
+        page.update()
+
+    def confirm_day_rollover(e=None):
+        result = apply_day_rollover(decisions=dict(rollover_choice))
+        day_rollover_dialog.open = False
+        rollover_choice.clear()
+        if result:
+            status_text.value = (
+                f"✓ Nowy dzień. Do Dziennika: {result['archived']}, "
+                f"zostało na dziś: {result['kept']}, do Mastera: {result['to_master']}."
+            )
+        warning_text.value = ""
+        refresh_view()
+
+    def _maybe_start_day_rollover():
+        """Rytuał dnia przy starcie/powrocie: pytaj albo decyduj automatycznie."""
+        try:
+            last_reset = get_config("last_reset_date", "")
+        except Exception:
+            last_reset = ""
+        if not last_reset:
+            # Pierwsze uruchomienie: cicho oznacz dzień jako rozpoczęty.
+            set_config("last_reset_date", date.today().isoformat())
+            return
+        if not get_pending_day_rollover():
+            return
+        mode = get_day_rollover_mode()
+        if mode == DAY_ROLLOVER_ASK:
+            open_day_rollover()
+        else:
+            apply_day_rollover(mode=mode)
+            status_text.value = "✓ Nowy dzień"
+            refresh_view()
+
+    day_rollover_dialog = ft.AlertDialog(
+        title=ft.Text("🌅 Nowy dzień"),
+        content=ft.Column([], tight=True),
+        actions=[
+            ft.TextButton("Później", on_click=close_day_rollover),
+            ft.Button("Zamknij dzień", bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY,
+                      on_click=confirm_day_rollover)
+        ]
+    )
+
+    # --- SPRINT 2.3: INBOX I 2-MINUTOWY TRIAGE ---
+    inbox_choice = {"task_id": None, "priority": "C", "daily": False,
+                    "deadline": None, "category": "Ogólne"}
+
+    def _inbox_reset_triage(task_id):
+        if inbox_choice["task_id"] != task_id:
+            inbox_choice.update({"task_id": task_id, "priority": "C", "daily": False,
+                                 "deadline": None, "category": "Ogólne"})
+
+    def set_inbox_priority(p):
+        inbox_choice["priority"] = p
+        refresh_view()
+
+    def set_inbox_daily(value):
+        inbox_choice["daily"] = bool(value)
+        refresh_view()
+
+    def set_inbox_category(cat):
+        inbox_choice["category"] = cat
+        refresh_view()
+
+    def set_inbox_deadline(value):
+        inbox_choice["deadline"] = value
+        refresh_view()
+
+    def apply_inbox_triage(task_id):
+        _inbox_reset_triage(task_id)
+        triage_inbox_task_db(
+            task_id,
+            category=inbox_choice["category"],
+            priority=inbox_choice["priority"],
+            is_daily=inbox_choice["daily"],
+            deadline=inbox_choice["deadline"],
+        )
+        inbox_choice["task_id"] = None
+        status_text.value = "✓ Posortowano zadanie z Inbox"
+        warning_text.value = ""
+        refresh_view()
+
+    def _inbox_pill(label, is_active, on_click):
+        return ft.Container(
+            content=ft.Text(label, size=11, weight=ft.FontWeight.BOLD,
+                            color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+            bgcolor="#10b98133" if is_active else "#21262d",
+            border=ft.Border.all(1, COLOR_SUCCESS if is_active else COLOR_BG_BORDER),
+            border_radius=8,
+            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+            on_click=on_click
+        )
+
+    def _build_inbox_section(inbox_tasks):
+        """Jedna karta naraz: priorytet, kategoria, termin, cel — bez zaśmiecania Mastera."""
+        task = inbox_tasks[0]
+        task_id, title = task[0], task[1]
+        _inbox_reset_triage(task_id)
+        touch = TOUCH_TARGET_MIN if is_mobile() else 30
+
+        prio_row = ft.Row([
+            _inbox_pill(p, inbox_choice["priority"] == p, lambda e, v=p: set_inbox_priority(v))
+            for p in ("A", "B", "C")
+        ], spacing=4)
+
+        cat_row = ft.Row([
+            _inbox_pill(z, inbox_choice["category"] == z, lambda e, v=z: set_inbox_category(v))
+            for z in ZONES
+        ], spacing=4, wrap=True)
+
+        today = date.today()
+        deadline_opts = [
+            ("Dziś", today.isoformat()),
+            ("Jutro", (today + timedelta(days=1)).isoformat()),
+            ("Za tydzień", (today + timedelta(days=7)).isoformat()),
+            ("Bez terminu", None),
+        ]
+        deadline_row = ft.Row([
+            _inbox_pill(lbl, inbox_choice["deadline"] == val,
+                        lambda e, v=val: set_inbox_deadline(v))
+            for lbl, val in deadline_opts
+        ], spacing=4, wrap=True)
+
+        daily_row = ft.Row([
+            _inbox_pill("Na dziś", inbox_choice["daily"] is True, lambda e: set_inbox_daily(True)),
+            _inbox_pill("Do Mastera", inbox_choice["daily"] is False, lambda e: set_inbox_daily(False)),
+        ], spacing=4)
+
+        return ft.Container(
+            bgcolor="#3b82f614",
+            border=ft.Border.all(1, COLOR_PRIO_C),
+            border_radius=12,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon(ft.Icons.ALL_INBOX_ROUNDED, size=18, color=COLOR_PRIO_C),
+                    ft.Text(f"Inbox ({len(inbox_tasks)})", size=13, weight=ft.FontWeight.BOLD,
+                            color=COLOR_TEXT_PRIMARY),
+                    ft.Container(expand=True),
+                    ft.Text("2-minutowy triage", size=11, color=COLOR_TEXT_SECONDARY),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                ft.Text(title, size=14, weight=ft.FontWeight.W_500, color=COLOR_TEXT_PRIMARY,
+                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text("Priorytet:", size=11, color=COLOR_TEXT_SECONDARY),
+                prio_row,
+                ft.Text("Kategoria:", size=11, color=COLOR_TEXT_SECONDARY),
+                cat_row,
+                ft.Text("Termin:", size=11, color=COLOR_TEXT_SECONDARY),
+                deadline_row,
+                ft.Text("Gdzie trafi:", size=11, color=COLOR_TEXT_SECONDARY),
+                daily_row,
+                ft.Row([
+                    ft.Button("✓ Zatwierdź", icon=ft.Icons.CHECK,
+                              bgcolor=COLOR_BG_SURFACE, color=COLOR_TEXT_PRIMARY, height=touch,
+                              on_click=lambda e, t=task_id: apply_inbox_triage(t))
+                ], alignment=ft.MainAxisAlignment.END)
+            ], spacing=6)
+        )
+
     def close_dialogs():
         quick_dialog.open = master_dialog.open = subtask_dialog.open = False
         edit_task_dialog.open = delete_task_dialog.open = edit_subtask_dialog.open = clear_archive_dialog.open = False
         end_of_day_dialog.open = import_confirm_dialog.open = edit_routine_dialog.open = False
+        day_rollover_dialog.open = False
         page.update()
 
     # Kolejność overlay jest używana przez testy (indeksy 3,4,5) — nowe okna tylko na końcu.
     page.overlay.extend([quick_dialog, master_dialog, subtask_dialog, edit_task_dialog, delete_task_dialog,
                          edit_subtask_dialog, clear_archive_dialog, end_of_day_dialog, import_confirm_dialog,
-                         edit_routine_dialog])
+                         edit_routine_dialog, day_rollover_dialog])
 
     def open_quick_modal(e):
         quick_dump_field.value = ""
@@ -3624,6 +4001,46 @@ def main(page: ft.Page):
                 ], spacing=8)
             )
 
+            # --- KARTA: Przełom dnia (Sprint 2.1) ---
+            def set_day_rollover_mode(mode):
+                set_config("day_rollover_mode", mode)
+                refresh_view()
+
+            rollover_pills = []
+            for mode_val, mode_lbl in (
+                (DAY_ROLLOVER_ASK, "Pytaj mnie"),
+                (DAY_ROLLOVER_AUTO_KEEP, "Auto: zostaw"),
+                (DAY_ROLLOVER_AUTO_MASTER, "Auto: do Mastera"),
+            ):
+                is_active = (get_day_rollover_mode() == mode_val)
+                rollover_pills.append(ft.Container(
+                    content=ft.Text(mode_lbl, size=11, weight=ft.FontWeight.BOLD,
+                                    color=COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_SECONDARY),
+                    bgcolor="#3b82f633" if is_active else "#21262d",
+                    border=ft.Border.all(1, COLOR_PRIO_B if is_active else COLOR_BG_BORDER),
+                    border_radius=8,
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=5),
+                    on_click=lambda e, mv=mode_val: set_day_rollover_mode(mv)
+                ))
+
+            card_day_rollover = ft.Container(
+                bgcolor=COLOR_BG_CARD, border=ft.Border.all(1, COLOR_BG_BORDER), border_radius=12, padding=14,
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.NIGHTLIGHT_ROUND, size=18, color=COLOR_PRIO_B),
+                        ft.Text("Przełom dnia", weight=ft.FontWeight.BOLD, size=14, color=COLOR_TEXT_PRIMARY)
+                    ], spacing=8),
+                    ft.Text("Co zrobić z niezrobionymi zadaniami, gdy zaczyna się nowy dzień:",
+                            size=12, color=COLOR_TEXT_SECONDARY),
+                    ft.Row(rollover_pills, spacing=6, wrap=True),
+                    ft.Text(
+                        "„Pytaj mnie” pokazuje spokojny ekran wyboru (zostaw / do Mastera / usuń z Daily). "
+                        "Nic nie zniknie po cichu, a zrobione zadania trafiają do Dziennika Sukcesów.",
+                        size=11, color=COLOR_TEXT_SECONDARY
+                    )
+                ], spacing=8)
+            )
+
             # --- KARTA: Terminy i przypomnienia ---
             def toggle_deadline_reminders(e):
                 set_config("deadline_reminders_enabled", "1" if e.control.value else "0")
@@ -3752,6 +4169,7 @@ def main(page: ft.Page):
                 card_sound,
                 card_deadlines,
                 card_daily_mode,
+                card_day_rollover,
                 card_backup,
                 card_routines,
                 card_limits,
@@ -3842,6 +4260,11 @@ def main(page: ft.Page):
         is_daily_mode = (current_view == "daily")
         title_text.value = "Daily" if is_daily_mode else "Master Lista"
         all_view_tasks = get_tasks(is_daily_view=is_daily_mode)
+        # Sprint 2.3: zadania z Inbox nie zaśmiecają listy Master — trafiają do
+        # osobnej sekcji triage'u (ukrytej, gdy Inbox jest pusty).
+        inbox_tasks = [
+            t for t in all_view_tasks if (t[6] or "") == INBOX_CATEGORY
+        ] if not is_daily_mode else []
         # Rutyny przypisane do konkretnych dni pokazują się na Daily tylko tego dnia
         # (rutyna bez dni = codzienna). Na Daily liczymy też postęp tylko z nich.
         all_routines = get_daily_routines() if is_daily_mode else get_routines()
@@ -3884,7 +4307,7 @@ def main(page: ft.Page):
                 )
 
         if is_daily_mode:
-            inline_input_field.hint_text = "⚡ Zapisz myśl do Master listy (Enter)..."
+            inline_input_field.hint_text = "⚡ Zrzut myśli do Inbox (Enter)..."
             quick_bar = ft.Container(
                 bgcolor=COLOR_BG_CARD,
                 border=ft.Border.all(1, COLOR_BG_BORDER),
@@ -3895,7 +4318,7 @@ def main(page: ft.Page):
                     ft.IconButton(
                         icon=ft.Icons.ADD_CIRCLE,
                         icon_color=COLOR_PRIO_B,
-                        tooltip="Zapisz do Master listy",
+                        tooltip="Zapisz do Inbox",
                         width=_touch(40),
                         height=_touch(40),
                         on_click=save_inline_input
@@ -3926,6 +4349,9 @@ def main(page: ft.Page):
             for t in all_view_tasks:
                 tid, tit, dly, dn, prio, subs, *extra = t
                 cat = extra[0] if extra else "Ogólne"
+
+                if cat == INBOX_CATEGORY:
+                    continue  # Inbox ma własną sekcję triage'u
 
                 if master_search_query:
                     q = master_search_query.lower()
@@ -4606,6 +5032,8 @@ def main(page: ft.Page):
                 ], spacing=8)
             )
             elements.append(filter_bar)
+            if inbox_tasks:
+                elements.append(_build_inbox_section(inbox_tasks))
         if is_daily_mode:
             preset_5 = ft.Container(
                 content=ft.Text("5 min", size=11, weight=ft.FontWeight.BOLD,
@@ -4768,14 +5196,8 @@ def main(page: ft.Page):
         content_column.controls = elements
 
         if is_daily_mode:
-            # Podpowiedź nowego dnia — jeśli ostatni reset był wcześniej, przypominamy
-            # o zamknięciu dnia zamiast po cichu gubić zrobione wczoraj zadania.
-            try:
-                last_reset = get_config("last_reset_date", "")
-            except Exception:
-                last_reset = ""
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            if last_reset and last_reset != today_str:
+            # Spokojne przypomnienie o przełomie dnia — bez czerwieni, bez wyrzutów.
+            if get_pending_day_rollover():
                 content_column.controls.append(
                     ft.Container(
                         bgcolor="#3b82f622",
@@ -4785,22 +5207,22 @@ def main(page: ft.Page):
                         content=ft.Row([
                             ft.Icon(ft.Icons.WB_SUNNY_OUTLINED, size=18, color=COLOR_PRIO_B),
                             ft.Text(
-                                f"Nowy dzień! Ostatni reset: {last_reset}. "
-                                "Zamknij poprzedni dzień, aby przenieść zrobione zadania do Dziennika Sukcesów.",
+                                "Nowy dzień. Zamknij poprzedni dzień, aby zdecydować, "
+                                "co zrobić z niezrobionymi zadaniami i przenieść sukcesy do Dziennika.",
                                 size=12, color=COLOR_TEXT_PRIMARY, expand=True
                             ),
-                            ft.TextButton("Zamknij dzień", on_click=open_end_of_day_dialog)
+                            ft.TextButton("Rozpocznij dzień", on_click=open_day_rollover)
                         ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
                     )
                 )
             content_column.controls.append(
                 ft.Row([
                     ft.Button(
-                        "🌙 Koniec dnia (Reset)",
+                        "🌅 Nowy dzień / Koniec dnia",
                         icon=ft.Icons.NIGHTLIGHT_ROUND,
                         bgcolor=COLOR_BG_SURFACE,
                         color=COLOR_TEXT_PRIMARY,
-                        on_click=open_end_of_day_dialog
+                        on_click=open_day_rollover
                     )
                 ], alignment=ft.MainAxisAlignment.END)
             )
@@ -4810,6 +5232,13 @@ def main(page: ft.Page):
     page.on_resize = lambda e: refresh_view()
     page.add(ft.SafeArea(content=root_layout, expand=True))
     refresh_view()
+
+    # Sprint 2.1: rytuał przełomu dnia przy starcie (i po powrocie z tła).
+    _maybe_start_day_rollover()
+    try:
+        page.on_resume = lambda e: _maybe_start_day_rollover()
+    except Exception:
+        LOG.debug("Platforma nie wspiera on_resume — brak sprawdzania po powrocie z tła")
 
     # Minutnik odtworzony z configu (np. po restarcie w trakcie odliczania)
     # musi sam wznowić wątek — inaczej stałby w miejscu.

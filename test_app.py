@@ -1731,5 +1731,201 @@ def test_ui_settings_has_deadline_card():
     assert any(_control_contains_text(c, "Terminy i przypomnienia") for c in content_col.controls)
 
 
+# --- 14. SPRINT 2.1: ŚWIADOMY PRZEŁÓW DNIA ---
+def test_day_rollover_pending_does_not_change_anything():
+    main.add_task_db("Zrobione wczoraj", is_daily=1, priority="A")
+    main.add_task_db("Niezrobione wczoraj", is_daily=1, priority="B")
+    tasks = main.get_tasks(is_daily_view=True)
+    done_id = [t[0] for t in tasks if t[1] == "Zrobione wczoraj"][0]
+    undone_id = [t[0] for t in tasks if t[1] == "Niezrobione wczoraj"][0]
+    main.toggle_done_db(done_id, 1)
+    main.set_config("last_reset_date", "2020-01-01")
+
+    info = main.get_pending_day_rollover()
+    assert info is not None
+    assert info["done_count"] == 1
+    assert [t[0] for t in info["undone_daily"]] == [undone_id]
+    # Nic się nie zmienia, dopóki nie ma decyzji.
+    assert main.get_config("last_reset_date") == "2020-01-01"
+    assert len(main.get_tasks(is_daily_view=False)) == 2
+    assert len(main.get_completed_archive()) == 0
+
+
+def test_apply_day_rollover_archives_once_and_honours_choices():
+    main.add_task_db("Zostaje", is_daily=1, priority="A")
+    main.add_task_db("Do Mastera", is_daily=1, priority="B")
+    main.add_task_db("Zrobione", is_daily=1, priority="C")
+    ids = {t[1]: t[0] for t in main.get_tasks(is_daily_view=True)}
+    main.toggle_done_db(ids["Zrobione"], 1)
+    main.set_config("last_reset_date", "2020-01-01")
+
+    result = main.apply_day_rollover(decisions={ids["Zostaje"]: "keep",
+                                                ids["Do Mastera"]: "master"})
+    assert result["archived"] == 1
+    assert result["kept"] == 1
+    assert result["to_master"] == 1
+    assert main.get_config("last_reset_date") == date.today().isoformat()
+
+    archive = main.get_completed_archive()
+    assert len(archive) == 1 and archive[0][1] == "Zrobione"
+
+    rows = {t[1]: t for t in main.get_tasks(is_daily_view=False)}
+    assert rows["Zostaje"][2] == 1        # nadal na Daily
+    assert rows["Do Mastera"][2] == 0     # wróciło do Mastera
+    assert "Zrobione" not in rows         # zrobione opuszcza listę
+
+    # Powtórne zamknięcie nie duplikuje archiwum (dzień już domknięty).
+    assert main.apply_day_rollover() is None
+    assert len(main.get_completed_archive()) == 1
+
+
+def test_day_rollover_mode_defaults_and_auto_master():
+    assert main.get_day_rollover_mode() == main.DAY_ROLLOVER_ASK
+    main.set_config("day_rollover_mode", "bzdura")
+    assert main.get_day_rollover_mode() == main.DAY_ROLLOVER_ASK
+
+    main.add_task_db("Niezrobione", is_daily=1, priority="B")
+    main.set_config("last_reset_date", "2020-01-01")
+    main.set_config("day_rollover_mode", main.DAY_ROLLOVER_AUTO_MASTER)
+    result = main.apply_day_rollover(mode=main.DAY_ROLLOVER_AUTO_MASTER)
+    assert result["to_master"] == 1
+    assert main.get_tasks(is_daily_view=False)[0][2] == 0
+
+
+def test_day_rollover_ui_dialog_open_and_later():
+    main.add_task_db("Zadanie dnia", is_daily=1, priority="B")
+    main.set_config("last_reset_date", "2020-01-01")
+    page = DummyPage(width=950)
+    main.main(page)
+
+    dialog = page.overlay[10]
+    assert dialog.open is True
+    assert "Nowy dzień" in (dialog.title.value or "")
+    assert _control_contains_text(dialog.content, "Zrobione wczoraj")
+    # Na Daily pojawia się spokojne wejście do rytuału.
+    assert _find_clickable(page.controls[0], "Rozpocznij dzień") is not None
+
+    # „Później” nic nie zmienia — dzień zostaje otwarty.
+    dialog.actions[0].on_click(None)
+    assert dialog.open is False
+    assert main.get_config("last_reset_date") == "2020-01-01"
+    assert len(main.get_tasks(is_daily_view=True)) == 1
+
+
+def test_day_rollover_ui_confirm_moves_task_to_master():
+    main.add_task_db("Do decyzji", is_daily=1, priority="B")
+    task_id = main.get_tasks(is_daily_view=True)[0][0]
+    main.set_config("last_reset_date", "2020-01-01")
+    page = DummyPage(width=950)
+    main.main(page)
+
+    dialog = page.overlay[10]
+    choice_container = [c for c in dialog.content.controls
+                        if isinstance(c, ft.Container) and isinstance(c.content, ft.Column)][0]
+    pills = choice_container.content.controls[1].controls
+    pills[1].on_click(None)  # „Wróć do Mastera”
+    dialog.actions[1].on_click(None)  # „Zamknij dzień”
+
+    assert dialog.open is False
+    row = [t for t in main.get_tasks(is_daily_view=False) if t[0] == task_id][0]
+    assert row[2] == 0
+    assert main.get_config("last_reset_date") == date.today().isoformat()
+
+
+# --- 15. SPRINT 2.3: INBOX I 2-MINUTOWY TRIAGE ---
+def test_quick_dump_goes_to_inbox():
+    page = DummyPage(width=950)
+    main.main(page)
+
+    root = page.controls[0].content
+    content_col = root.content.controls[2].content
+    quick_bar = content_col.controls[1]
+    field = quick_bar.content.controls[0]
+    add_btn = quick_bar.content.controls[1]
+    field.value = "Myśl do posortowania"
+    add_btn.on_click(None)
+
+    inbox = main.get_inbox_tasks()
+    assert len(inbox) == 1
+    assert inbox[0][1] == "Myśl do posortowania"
+    assert inbox[0][2] == 0      # is_daily
+    assert inbox[0][4] == "C"    # priorytet
+
+
+def test_inbox_hidden_from_master_and_section_visible():
+    main.add_task_db("Z Inbox", is_daily=0, priority="C", category=main.INBOX_CATEGORY)
+    main.add_task_db("Zwykłe zadanie", is_daily=0, priority="B")
+
+    page = DummyPage(width=950)
+    main.main(page)
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    sidebar_col.controls[2].content.on_click(None)  # Master
+
+    content_col = root.content.controls[2].content
+    tasks_col = [c for c in content_col.controls if isinstance(c, ft.Column)][0]
+    texts = [c.value for c in _iter_controls(tasks_col) if isinstance(c, ft.Text)]
+    assert "Zwykłe zadanie" in texts
+    assert "Z Inbox" not in texts
+    # Sekcja Inbox widoczna z licznikiem i nazwą zadania.
+    assert any(_control_contains_text(c, "Inbox (1)") for c in content_col.controls)
+    assert any(_control_contains_text(c, "Z Inbox") for c in content_col.controls)
+
+
+def test_triage_inbox_task_db_moves_and_clears():
+    main.add_task_db("Do triage", is_daily=0, priority="C", category=main.INBOX_CATEGORY)
+    task_id = main.get_inbox_tasks()[0][0]
+    main.triage_inbox_task_db(task_id, category="💼 Praca", priority="A",
+                              is_daily=True, deadline="2026-12-01")
+    row = [t for t in main.get_tasks(is_daily_view=False) if t[0] == task_id][0]
+    assert row[6] == "💼 Praca"
+    assert row[4] == "A"
+    assert row[2] == 1
+    assert row[7] == "2026-12-01"
+    assert main.get_inbox_tasks() == []
+
+    # Kategoria „Inbox” jest niedozwolona — zadanie nie utknie w Inbox.
+    main.add_task_db("Drugie", is_daily=0, priority="C", category=main.INBOX_CATEGORY)
+    other_id = main.get_inbox_tasks()[0][0]
+    main.triage_inbox_task_db(other_id, category=main.INBOX_CATEGORY)
+    moved = [t for t in main.get_tasks(is_daily_view=False) if t[0] == other_id][0]
+    assert moved[6] == "Ogólne"
+
+
+def test_inbox_ui_confirm_button_applies_triage():
+    main.add_task_db("Inbox UI", is_daily=0, priority="C", category=main.INBOX_CATEGORY)
+    task_id = main.get_inbox_tasks()[0][0]
+
+    page = DummyPage(width=950)
+    main.main(page)
+    root = page.controls[0].content
+    sidebar_col = root.content.controls[0].content
+    sidebar_col.controls[2].content.on_click(None)  # Master
+
+    confirm_btn = _find_clickable(page.controls[0], "Zatwierdź")
+    assert confirm_btn is not None
+    confirm_btn.on_click(None)
+
+    assert main.get_inbox_tasks() == []
+    row = [t for t in main.get_tasks(is_daily_view=False) if t[0] == task_id][0]
+    assert row[6] == "Ogólne"
+
+
+def test_settings_day_rollover_card_sets_mode():
+    page = DummyPage(width=950)
+    main.main(page)
+
+    root_pc = page.controls[0].content
+    sidebar_col = root_pc.content.controls[0].content
+    sidebar_col.controls[-1].on_click(None)  # Ustawienia
+    content_col = root_pc.content.controls[2].content
+    assert any(_control_contains_text(c, "Przełom dnia") for c in content_col.controls)
+
+    pill = _find_clickable(page.controls[0], "Auto: do Mastera")
+    assert pill is not None
+    pill.on_click(None)
+    assert main.get_day_rollover_mode() == main.DAY_ROLLOVER_AUTO_MASTER
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
